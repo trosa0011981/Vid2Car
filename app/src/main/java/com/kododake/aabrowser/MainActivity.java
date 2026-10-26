@@ -44,6 +44,11 @@ import androidx.webkit.WebViewFeature;
 
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -59,13 +64,22 @@ import java.util.List;
  *    SW_SECURE_DECODE enforcer for Android Auto virtual displays.
  * 4. Top-level NBA.com navigation bridge (bypassing X-Frame-Options / CSP frame-ancestors so
  *    official NBA.com sign-in and streams load without a broken Android WebView iframe icon)
- *    with a native floating Car Return Bar.
+ *    with a native floating Car Return Bar and Desktop Chrome User-Agent so NBA.com serves
+ *    its HTML5 Widevine web player instead of mobile app deep-link prompts.
  * 5. Strict In-App URL interception: blocks Android App Links / intent:// / nba:// deep links
  *    from ever opening the native NBA app on the user's phone.
  */
 public class MainActivity extends Activity {
 
     private static final String BUNDLED_APP_URL = "file:///android_asset/www/index.html";
+
+    /**
+     * Desktop Chrome User-Agent without "; wv" or "Mobile" so https://www.nba.com/game/...?watch
+     * initializes the HTML5 Widevine web video player directly inside AA Browser instead of
+     * prompting to open the mobile NBA Android app.
+     */
+    private static final String DESKTOP_CHROME_UA =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
     /**
      * Exact Widevine L3 (SW_SECURE_DECODE) Enforcer script from kododake/AABrowser so DRM video
@@ -149,6 +163,8 @@ public class MainActivity extends Activity {
     private LinearLayout topNbaReturnBar;
     private TextView topBarTitleView;
     private DiagnosticLogCollector diagnostics;
+    private String savedNbaEmail = "";
+    private String savedNbaPassword = "";
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -196,6 +212,7 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setUserAgentString(DESKTOP_CHROME_UA);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
         settings.setAllowFileAccessFromFileURLs(true);
@@ -294,6 +311,9 @@ public class MainActivity extends Activity {
                 try {
                     CookieManager.getInstance().flush();
                     view.evaluateJavascript(DRM_L3_ENFORCER_JS, null);
+                    if (url != null && url.contains("nba.com")) {
+                        injectNbaPageEnhancer(view, url);
+                    }
                 } catch (Exception ignored) {
                 }
             }
@@ -411,6 +431,55 @@ public class MainActivity extends Activity {
     }
 
     /**
+     * Enhances top-level NBA.com pages when opened inside MainActivity's WebView:
+     * 1. Removes mobile app smart banners
+     * 2. Ensures inline HTML5 video playback
+     * 3. Auto-fills saved NBA ID credentials on sign-in pages
+     * 4. Auto-starts the requested stream when ?watch is present
+     */
+    private void injectNbaPageEnhancer(WebView view, String url) {
+        String emailJson = JSONObject.quote(savedNbaEmail != null ? savedNbaEmail : "");
+        String passJson = JSONObject.quote(savedNbaPassword != null ? savedNbaPassword : "");
+        String js = "(function() {\n" +
+                "  try {\n" +
+                "    document.querySelectorAll('video').forEach(function(v) {\n" +
+                "      v.setAttribute('playsinline', 'true');\n" +
+                "      v.setAttribute('webkit-playsinline', 'true');\n" +
+                "    });\n" +
+                "    var savedEmail = " + emailJson + ";\n" +
+                "    var savedPass = " + passJson + ";\n" +
+                "    if (savedEmail && window.location.pathname.indexOf('sign-in') !== -1) {\n" +
+                "      setTimeout(function() {\n" +
+                "        var emailInput = document.querySelector('input[type=\"email\"], input[name=\"email\"], input[id*=\"email\" i]');\n" +
+                "        var passInput = document.querySelector('input[type=\"password\"], input[name=\"password\"]');\n" +
+                "        if (emailInput && !emailInput.value) {\n" +
+                "          var nativeEmailSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;\n" +
+                "          nativeEmailSetter.call(emailInput, savedEmail);\n" +
+                "          emailInput.dispatchEvent(new Event('input', { bubbles: true }));\n" +
+                "        }\n" +
+                "        if (passInput && savedPass && !passInput.value) {\n" +
+                "          var nativePassSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;\n" +
+                "          nativePassSetter.call(passInput, savedPass);\n" +
+                "          passInput.dispatchEvent(new Event('input', { bubbles: true }));\n" +
+                "        }\n" +
+                "      }, 900);\n" +
+                "    }\n" +
+                "    if (window.location.search.indexOf('watch') !== -1) {\n" +
+                "      setTimeout(function() {\n" +
+                "        var btns = Array.from(document.querySelectorAll('button, a'));\n" +
+                "        var watchBtn = btns.find(function(b) {\n" +
+                "          var t = (b.textContent || '').trim().toLowerCase();\n" +
+                "          return t === 'watch' || t === 'watch live' || t === 'play' || t.indexOf('streams') !== -1;\n" +
+                "        });\n" +
+                "        if (watchBtn) watchBtn.click();\n" +
+                "      }, 1500);\n" +
+                "    }\n" +
+                "  } catch (e) {}\n" +
+                "})();";
+        view.evaluateJavascript(js, null);
+    }
+
+    /**
      * Native top toolbar shown when MainActivity's WebView navigates directly to https://www.nba.com
      * (e.g. Official NBA ID Sign-In or direct stream playback) so the user can return to the Car Wrapper
      * with one tap and no X-Frame-Options blocking.
@@ -438,7 +507,7 @@ public class MainActivity extends Activity {
         backBtn.setOnClickListener(v -> returnToBundledWrapper());
 
         topBarTitleView = new TextView(this);
-        topBarTitleView.setText("Official NBA.com (In-App Session · Native NBA App Blocked)");
+        topBarTitleView.setText("Official NBA.com (In-App Session · Widevine L3 Web Player)");
         topBarTitleView.setTextColor(Color.parseColor("#D1D5DB"));
         topBarTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         topBarTitleView.setSingleLine(true);
@@ -530,6 +599,83 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void returnToNbaWrapper() {
             returnToBundledWrapper();
+        }
+
+        @JavascriptInterface
+        public void saveNbaCredentials(final String email, final String password) {
+            savedNbaEmail = email != null ? email : "";
+            savedNbaPassword = password != null ? password : "";
+            if (diagnostics != null) {
+                diagnostics.logEvent("NBA_AUTH", "Cached NBA ID credentials for in-app WebView autofill (" + savedNbaEmail + ")");
+            }
+        }
+
+        /**
+         * Natively fetches https://www.nba.com/games?date=YYYY-MM-DD (bypassing browser CORS)
+         * and extracts <script id="__NEXT_DATA__"> so the Car Wrapper gets official NBA.com
+         * 10-digit gameIds, live scores, and exact /game/...?watch URLs.
+         */
+        @JavascriptInterface
+        public void fetchNbaScheduleAsync(final String dateKey) {
+            new Thread(() -> {
+                HttpURLConnection conn = null;
+                try {
+                    String target = "https://www.nba.com/games?date=" + Uri.encode(dateKey != null ? dateKey : "");
+                    URL url = new URL(target);
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(6000);
+                    conn.setReadTimeout(6000);
+                    conn.setRequestProperty("User-Agent", DESKTOP_CHROME_UA);
+                    conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                    try {
+                        String cookie = CookieManager.getInstance().getCookie("https://www.nba.com");
+                        if (cookie != null && !cookie.isEmpty()) {
+                            conn.setRequestProperty("Cookie", cookie);
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    int status = conn.getResponseCode();
+                    if (status >= 200 && status < 300) {
+                        StringBuilder html = new StringBuilder();
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                html.append(line).append("\n");
+                            }
+                        }
+                        String fullHtml = html.toString();
+                        String marker = "<script id=\"__NEXT_DATA__\" type=\"application/json\">";
+                        int startIdx = fullHtml.indexOf(marker);
+                        if (startIdx != -1) {
+                            startIdx += marker.length();
+                            int endIdx = fullHtml.indexOf("</script>", startIdx);
+                            if (endIdx != -1) {
+                                final String nextDataJson = fullHtml.substring(startIdx, endIdx);
+                                final String quotedDate = JSONObject.quote(dateKey);
+                                final String quotedJson = JSONObject.quote(nextDataJson);
+                                runOnUiThread(() -> {
+                                    if (webView != null) {
+                                        webView.evaluateJavascript(
+                                                "if (window.__onNbaScheduleLoaded) { window.__onNbaScheduleLoaded(" + quotedDate + ", " + quotedJson + "); }",
+                                                null);
+                                    }
+                                });
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    if (diagnostics != null) {
+                        diagnostics.logEvent("NBA_FETCH_WARN", "Native NBA schedule fetch fallback for " + dateKey + ": " + e.getMessage());
+                    }
+                } finally {
+                    if (conn != null) {
+                        conn.disconnect();
+                    }
+                }
+            }, "NBA-Schedule-Fetcher").start();
         }
 
         @JavascriptInterface

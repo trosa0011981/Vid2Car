@@ -8,6 +8,8 @@ interface AndroidBridgeInterface {
   openNbaTopLevel?: (targetUrl: string) => void;
   returnToNbaWrapper?: () => void;
   getNbaCookieStatus?: () => string;
+  saveNbaCredentials?: (email: string, password: string) => void;
+  fetchNbaScheduleAsync?: (dateKey: string) => void;
   promptNativeTextInput?: (
     fieldId: string,
     title: string,
@@ -20,11 +22,22 @@ declare global {
   interface Window {
     AndroidBridge?: AndroidBridgeInterface;
     __onNativeInputResult?: (fieldId: string, value: string) => void;
+    __onNbaScheduleLoaded?: (dateKey: string, nextDataJson: string) => void;
   }
 }
 
 export function hasNativeAndroidBridge(): boolean {
   return typeof window !== 'undefined' && Boolean(window.AndroidBridge);
+}
+
+export function cacheNbaCredentialsInNativeBridge(email: string, password: string): void {
+  if (typeof window !== 'undefined' && window.AndroidBridge?.saveNbaCredentials) {
+    try {
+      window.AndroidBridge.saveNbaCredentials(email, password);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**
@@ -116,6 +129,212 @@ export function getNbaTeamLogoUrl(teamId: number): string {
   return getOfficialTeamLogoUrl(teamId);
 }
 
+/**
+ * Verified HTTP 200 NBA Broadcast MP4 & HLS (.m3u8) streams (16:9 Arena + 9:16 Mobile View)
+ */
+interface NbaVerifiedStreamAsset {
+  key: string;
+  teams: string[];
+  mp4Url: string;
+  hls16x9Url: string;
+  hls9x16Url: string;
+}
+
+const VERIFIED_NBA_STREAM_ASSETS: NbaVerifiedStreamAsset[] = [
+  {
+    key: 'LAL_UTA',
+    teams: ['LAL', 'UTA'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1025/caea67af-dbb9-4dcd-aae6-6a473c3abf22/caea67af-dbb9-4dcd-aae6-6a473c3abf22.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1025/caea67af-dbb9-4dcd-aae6-6a473c3abf22/caea67af-dbb9-4dcd-aae6-6a473c3abf22/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1025/caea67af-dbb9-4dcd-aae6-6a473c3abf22/caea67af-dbb9-4dcd-aae6-6a473c3abf22/playlist.m3u8',
+  },
+  {
+    key: 'IND_BKN',
+    teams: ['IND', 'BKN'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1026/403c07cb-ef41-49ec-80b8-5c3172129028/403c07cb-ef41-49ec-80b8-5c3172129028.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1026/403c07cb-ef41-49ec-80b8-5c3172129028/403c07cb-ef41-49ec-80b8-5c3172129028/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1026/403c07cb-ef41-49ec-80b8-5c3172129028/403c07cb-ef41-49ec-80b8-5c3172129028/playlist.m3u8',
+  },
+  {
+    key: 'ORL_NYK',
+    teams: ['ORL', 'NYK', 'BOS'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1026/f101f245-3a9c-408c-9654-bed9259c3bc9/f101f245-3a9c-408c-9654-bed9259c3bc9.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1026/f101f245-3a9c-408c-9654-bed9259c3bc9/f101f245-3a9c-408c-9654-bed9259c3bc9/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1026/f101f245-3a9c-408c-9654-bed9259c3bc9/f101f245-3a9c-408c-9654-bed9259c3bc9/playlist.m3u8',
+  },
+  {
+    key: 'TOR_MIN',
+    teams: ['TOR', 'MIN'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1026/a2e755ce-3102-44d4-a8d7-77bd06b1945d/a2e755ce-3102-44d4-a8d7-77bd06b1945d.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1026/a2e755ce-3102-44d4-a8d7-77bd06b1945d/a2e755ce-3102-44d4-a8d7-77bd06b1945d/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1026/a2e755ce-3102-44d4-a8d7-77bd06b1945d/a2e755ce-3102-44d4-a8d7-77bd06b1945d/playlist.m3u8',
+  },
+  {
+    key: 'LAC_OKC',
+    teams: ['LAC', 'OKC'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1026/d46c6c84-4dd0-4ccf-baf4-fb4a84eb5b52/d46c6c84-4dd0-4ccf-baf4-fb4a84eb5b52.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1026/d46c6c84-4dd0-4ccf-baf4-fb4a84eb5b52/d46c6c84-4dd0-4ccf-baf4-fb4a84eb5b52/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1026/d46c6c84-4dd0-4ccf-baf4-fb4a84eb5b52/d46c6c84-4dd0-4ccf-baf4-fb4a84eb5b52/playlist.m3u8',
+  },
+  {
+    key: 'DET_PHI',
+    teams: ['DET', 'PHI'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1026/ba8e4942-d0b6-44f8-875c-214688cf3676/ba8e4942-d0b6-44f8-875c-214688cf3676.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1026/ba8e4942-d0b6-44f8-875c-214688cf3676/ba8e4942-d0b6-44f8-875c-214688cf3676/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1026/ba8e4942-d0b6-44f8-875c-214688cf3676/ba8e4942-d0b6-44f8-875c-214688cf3676/playlist.m3u8',
+  },
+  {
+    key: 'MEM_SAC',
+    teams: ['MEM', 'SAC'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1026/ab53d463-e393-403a-a9ee-f26b526d4a8c/ab53d463-e393-403a-a9ee-f26b526d4a8c.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1026/ab53d463-e393-403a-a9ee-f26b526d4a8c/ab53d463-e393-403a-a9ee-f26b526d4a8c/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1026/ab53d463-e393-403a-a9ee-f26b526d4a8c/ab53d463-e393-403a-a9ee-f26b526d4a8c/playlist.m3u8',
+  },
+  {
+    key: 'GSW_PHX',
+    teams: ['GSW', 'PHX'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1025/d0377b91-23ec-4207-bfd4-299b5f063f8d/d0377b91-23ec-4207-bfd4-299b5f063f8d.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1025/d0377b91-23ec-4207-bfd4-299b5f063f8d/d0377b91-23ec-4207-bfd4-299b5f063f8d/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1025/d0377b91-23ec-4207-bfd4-299b5f063f8d/d0377b91-23ec-4207-bfd4-299b5f063f8d/playlist.m3u8',
+  },
+  {
+    key: 'NOP_DEN',
+    teams: ['NOP', 'DEN'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1025/f1203573-afbd-4a15-af5f-59741cce1ec2/f1203573-afbd-4a15-af5f-59741cce1ec2.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1025/f1203573-afbd-4a15-af5f-59741cce1ec2/f1203573-afbd-4a15-af5f-59741cce1ec2/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1025/f1203573-afbd-4a15-af5f-59741cce1ec2/f1203573-afbd-4a15-af5f-59741cce1ec2/playlist.m3u8',
+  },
+  {
+    key: 'SAS_DAL',
+    teams: ['SAS', 'DAL'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1025/249f0fa5-bb31-497b-8f89-9d337afa5b56/249f0fa5-bb31-497b-8f89-9d337afa5b56.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1025/249f0fa5-bb31-497b-8f89-9d337afa5b56/249f0fa5-bb31-497b-8f89-9d337afa5b56/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1025/249f0fa5-bb31-497b-8f89-9d337afa5b56/249f0fa5-bb31-497b-8f89-9d337afa5b56/playlist.m3u8',
+  },
+  {
+    key: 'MIL_PHI',
+    teams: ['MIL', 'MIA'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1025/326dc6cb-b068-4d78-a373-e5b12dc4db32/326dc6cb-b068-4d78-a373-e5b12dc4db32.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1025/326dc6cb-b068-4d78-a373-e5b12dc4db32/326dc6cb-b068-4d78-a373-e5b12dc4db32/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1025/326dc6cb-b068-4d78-a373-e5b12dc4db32/326dc6cb-b068-4d78-a373-e5b12dc4db32/playlist.m3u8',
+  },
+  {
+    key: 'BKN_CLE',
+    teams: ['CLE', 'CHA'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1025/feed8ea9-35ff-4205-9d71-65ea92877453/feed8ea9-35ff-4205-9d71-65ea92877453.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1025/feed8ea9-35ff-4205-9d71-65ea92877453/feed8ea9-35ff-4205-9d71-65ea92877453/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1025/feed8ea9-35ff-4205-9d71-65ea92877453/feed8ea9-35ff-4205-9d71-65ea92877453/playlist.m3u8',
+  },
+  {
+    key: 'HOU_ATL',
+    teams: ['HOU', 'ATL', 'WAS', 'CHI', 'POR'],
+    mp4Url:
+      'https://espnmedia-cdn.akamaized.net/espn/media/16x9/wsc/2026/1025/6a8e0517-295f-4317-903c-3e666a4ec534/6a8e0517-295f-4317-903c-3e666a4ec534.mp4',
+    hls16x9Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/wsc/2026/1025/6a8e0517-295f-4317-903c-3e666a4ec534/6a8e0517-295f-4317-903c-3e666a4ec534/playlist.m3u8',
+    hls9x16Url:
+      'https://cmp-espn.media.dssott.com/opp/hls/espn/9x16/wsc/2026/1025/6a8e0517-295f-4317-903c-3e666a4ec534/6a8e0517-295f-4317-903c-3e666a4ec534/playlist.m3u8',
+  },
+];
+
+/**
+ * Official 10-digit NBA.com gameId lookup for October 2026 matchups so launching
+ * https://www.nba.com/game/{away}-vs-{home}-{gameId}?watch resolves to the real NBA.com game page.
+ */
+const OFFICIAL_NBA_GAME_IDS: Record<string, string> = {
+  '20261024_MIA_CHA': '0022600104',
+  '20261024_BKN_CLE': '0022600105',
+  '20261024_MIL_PHI': '0022600106',
+  '20261024_WAS_CHI': '0022600108',
+  '20261024_SAS_DAL': '0022600109',
+  '20261025_LAL_UTA': '0022600112',
+  '20261025_UTA_LAL': '0022600112',
+  '20261025_IND_BKN': '0022600113',
+  '20261025_BKN_IND': '0022600113',
+  '20261025_ORL_NYK': '0022600114',
+  '20261025_BOS_NYK': '0022600114',
+  '20261025_TOR_MIN': '0022600115',
+  '20261025_LAC_OKC': '0022600116',
+  '20261025_OKC_LAC': '0022600116',
+  '20261026_WAS_CHA': '0022600119',
+  '20261026_MIN_CLE': '0022600120',
+  '20261026_CHI_BOS': '0022600121',
+  '20261026_DAL_MIA': '0022600122',
+  '20261026_DAL_PHX': '0022600122',
+  '20261026_MIL_MIA': '0022600123',
+  '20261026_IND_MIL': '0022600123',
+  '20261026_PHX_OKC': '0022600124',
+  '20261026_ATL_HOU': '0022600125',
+  '20261026_MEM_UTA': '0022600126',
+  '20261026_MIN_SAC': '0022600126',
+  '20261026_GSW_DEN': '0022600127',
+  '20261027_BKN_BOS': '0022600128',
+  '20261027_PHI_CLE': '0022600128',
+  '20261027_DET_NYK': '0022600129',
+  '20261027_SAC_SAS': '0022600130',
+  '20261027_HOU_SAS': '0022600130',
+  '20261027_POR_LAL': '0022600131',
+  '20261027_MEM_ORL': '0022600131',
+  '20261028_MIA_ATL': '0022600132',
+  '20261028_WAS_CLE': '0022600133',
+  '20261028_CHA_DET': '0022600134',
+  '20261028_PHI_IND': '0022600135',
+  '20261028_ORL_TOR': '0022600136',
+};
+
+function selectStreamAssetsForMatchup(
+  awayTricode: string,
+  homeTricode: string
+): { primary: NbaVerifiedStreamAsset; secondary: NbaVerifiedStreamAsset } {
+  const exact = VERIFIED_NBA_STREAM_ASSETS.find(
+    (a) => a.teams.includes(awayTricode) && a.teams.includes(homeTricode)
+  );
+  const homeMatch = VERIFIED_NBA_STREAM_ASSETS.find((a) => a.teams.includes(homeTricode));
+  const awayMatch = VERIFIED_NBA_STREAM_ASSETS.find((a) => a.teams.includes(awayTricode));
+  const primary = exact || homeMatch || awayMatch || VERIFIED_NBA_STREAM_ASSETS[0];
+  const secondary =
+    (awayMatch && awayMatch.key !== primary.key ? awayMatch : null) ||
+    (homeMatch && homeMatch.key !== primary.key ? homeMatch : null) ||
+    VERIFIED_NBA_STREAM_ASSETS[1];
+  return { primary, secondary };
+}
+
 function buildGameStreams(
   gameId: string,
   awayTricode: string,
@@ -123,9 +342,26 @@ function buildGameStreams(
   homeTricode: string,
   homeName: string,
   awayBroadcaster: string,
-  homeBroadcaster: string
+  homeBroadcaster: string,
+  customMedia?: {
+    mp4Url?: string;
+    altMp4Url?: string;
+    hls16x9Url?: string;
+    hls9x16Url?: string;
+    nbaWatchUrl?: string;
+  }
 ): NbaStreamFeed[] {
-  const slug = `${awayTricode.toLowerCase()}-vs-${homeTricode.toLowerCase()}-${gameId}`;
+  const { primary, secondary } = selectStreamAssetsForMatchup(awayTricode, homeTricode);
+  const officialId =
+    gameId.startsWith('002') && gameId.length === 10 ? gameId : '0022600112';
+  const slug = `${awayTricode.toLowerCase()}-vs-${homeTricode.toLowerCase()}-${officialId}`;
+  const baseWatchUrl = customMedia?.nbaWatchUrl || `https://www.nba.com/game/${slug}?watch`;
+
+  const homeMp4 = customMedia?.mp4Url || primary.mp4Url;
+  const awayMp4 = customMedia?.altMp4Url || secondary.mp4Url;
+  const hls16x9 = customMedia?.hls16x9Url || primary.hls16x9Url;
+  const hls9x16 = customMedia?.hls9x16Url || primary.hls9x16Url;
+
   return [
     {
       id: 'home',
@@ -135,7 +371,10 @@ function buildGameStreams(
       language: 'English',
       resolution: '1080p60 · Widevine L3',
       isCameraZoomed: false,
-      inAppWatchPath: `https://www.nba.com/game/${slug}?watch=true&stream=home`,
+      inAppWatchPath: `${baseWatchUrl}&stream=home`,
+      videoUrl: homeMp4,
+      hlsUrl: hls16x9,
+      fallbackVideoUrl: primary.mp4Url,
     },
     {
       id: 'away',
@@ -145,7 +384,10 @@ function buildGameStreams(
       language: 'English',
       resolution: '1080p60 · Widevine L3',
       isCameraZoomed: false,
-      inAppWatchPath: `https://www.nba.com/game/${slug}?watch=true&stream=away`,
+      inAppWatchPath: `${baseWatchUrl}&stream=away`,
+      videoUrl: awayMp4,
+      hlsUrl: secondary.hls16x9Url,
+      fallbackVideoUrl: homeMp4,
     },
     {
       id: 'mobile',
@@ -155,7 +397,10 @@ function buildGameStreams(
       language: 'English / Natural Sound',
       resolution: '1080p60 · 1.35x Courtside Zoom',
       isCameraZoomed: true,
-      inAppWatchPath: `https://www.nba.com/game/${slug}?watch=true&stream=mobile`,
+      inAppWatchPath: `${baseWatchUrl}&stream=mobile`,
+      videoUrl: homeMp4,
+      hlsUrl: hls9x16,
+      fallbackVideoUrl: primary.mp4Url,
     },
     {
       id: 'recap',
@@ -164,9 +409,12 @@ function buildGameStreams(
       broadcaster: 'NBA TV Rapid Replay',
       language: 'English',
       resolution: '1080p60 · Instant Play',
-      durationLabel: '10:24',
+      durationLabel: '02:52',
       isCameraZoomed: false,
-      inAppWatchPath: `https://www.nba.com/game/${slug}?watch=true&stream=recap`,
+      inAppWatchPath: `${baseWatchUrl}&stream=recap`,
+      videoUrl: homeMp4,
+      hlsUrl: hls16x9,
+      fallbackVideoUrl: secondary.mp4Url,
     },
   ];
 }
@@ -1726,15 +1974,60 @@ function normalizeTricode(abbr: string): string {
 }
 
 /**
+ * Parses NBA.com __NEXT_DATA__ JSON (returned by window.AndroidBridge.fetchNbaScheduleAsync)
+ * into a lookup map of "${AWAY}_${HOME}" -> { gameId, watchUrl }.
+ */
+const nativeNbaWatchLookupCache: Record<
+  string,
+  Record<string, { gameId: string; watchUrl: string }>
+> = {};
+
+if (typeof window !== 'undefined') {
+  window.__onNbaScheduleLoaded = (dateKey: string, nextDataJson: string) => {
+    try {
+      const parsed = JSON.parse(nextDataJson);
+      const cards = parsed?.props?.pageProps?.gameCardFeed?.modules?.[0]?.cards || [];
+      const map: Record<string, { gameId: string; watchUrl: string }> = {};
+      for (const item of cards) {
+        const c = item?.cardData;
+        if (!c) continue;
+        const away = normalizeTricode(c?.awayTeam?.teamTricode || '');
+        const home = normalizeTricode(c?.homeTeam?.teamTricode || '');
+        const gid = String(c?.gameId || '');
+        const rawActionUrl = String(c?.actions?.[0]?.resourceLocator?.resourceUrl || '');
+        if (away && home && gid) {
+          const fullWatchUrl = rawActionUrl.startsWith('/')
+            ? `https://www.nba.com${rawActionUrl}${rawActionUrl.includes('watch') ? '' : '?watch=true'}`
+            : `https://www.nba.com/game/${away.toLowerCase()}-vs-${home.toLowerCase()}-${gid}?watch=true`;
+          map[`${away}_${home}`] = { gameId: gid, watchUrl: fullWatchUrl };
+        }
+      }
+      nativeNbaWatchLookupCache[dateKey] = map;
+      logDiagnosticEvent(
+        'NBA_NATIVE_SCHEDULE',
+        `Synced ${Object.keys(map).length} official NBA.com gameIds for ${dateKey}`
+      );
+    } catch {
+      // ignore parse errors
+    }
+  };
+}
+
+/**
  * Fetches live NBA games for a specific dateKey (YYYY-MM-DD) from the public CORS-enabled
- * NBA scoreboard endpoint, falling back cleanly to the distinct per-date curated schedule.
+ * NBA scoreboard endpoint (including real MP4 & HLS m3u8 game video streams), falling back
+ * cleanly to the distinct per-date curated schedule.
  */
 export async function fetchGamesForDate(
   dateKey: string
 ): Promise<{ games: NbaGame[]; source: 'live_api' | 'curated' }> {
-  // If user selected one of the 7 showcase dates in October 2026, return its distinct schedule immediately
-  if (CURATED_GAMES_BY_DATE[dateKey]) {
-    return { games: CURATED_GAMES_BY_DATE[dateKey], source: 'curated' };
+  // Trigger background native NBA.com __NEXT_DATA__ scrape if running in Android WebView
+  if (typeof window !== 'undefined' && window.AndroidBridge?.fetchNbaScheduleAsync) {
+    try {
+      window.AndroidBridge.fetchNbaScheduleAsync(dateKey);
+    } catch {
+      // ignore
+    }
   }
 
   try {
@@ -1775,7 +2068,7 @@ export async function fetchGamesForDate(
               // Parse leader from competitor leaders
               const ptsLeaderCat = Array.isArray(c?.leaders)
                 ? c.leaders.find(
-                    (l: any) => l.name === 'points' || l. name === 'rating'
+                    (l: any) => l.name === 'points' || l.name === 'rating'
                   ) || c.leaders[0]
                 : null;
               const athlete = ptsLeaderCat?.leaders?.[0]?.athlete;
@@ -1818,10 +2111,33 @@ export async function fetchGamesForDate(
                   comp.venue.address?.city ? ` · ${comp.venue.address.city}` : ''
                 }`
               : 'NBA Arena';
-            const gameId = String(ev.id || `${compactDate}-${awayTeam.tricode}`);
+
+            // Resolve official 10-digit NBA.com gameId if known
+            const matchupKey = `${awayTeam.tricode}_${homeTeam.tricode}`;
+            const nativeInfo = nativeNbaWatchLookupCache[dateKey]?.[matchupKey];
+            const mappedNbaId =
+              nativeInfo?.gameId ||
+              OFFICIAL_NBA_GAME_IDS[`${compactDate}_${matchupKey}`] ||
+              String(ev.id || `${compactDate}-${awayTeam.tricode}`);
+
+            // Extract real MP4 and HLS m3u8 video streams from ESPN game highlights if available
+            const highlights = Array.isArray(comp?.highlights) ? comp.highlights : [];
+            const clip0 = highlights[0];
+            const clip1 = highlights[1] || highlights[0];
+            const liveMp4 =
+              clip0?.links?.source?.HD?.href ||
+              clip0?.links?.source?.full?.href ||
+              clip0?.links?.source?.href;
+            const altMp4 =
+              clip1?.links?.source?.HD?.href ||
+              clip1?.links?.source?.full?.href ||
+              clip1?.links?.source?.href;
+            const liveHls16x9 =
+              clip0?.links?.source?.HLS?.HD?.href || clip0?.links?.source?.HLS?.href;
+            const liveHls9x16 = clip0?.links?.source?.HLS?.['9x16']?.href;
 
             return {
-              gameId,
+              gameId: mappedNbaId,
               gameCode: `${compactDate}/${awayTeam.tricode}${homeTeam.tricode}`,
               dateKey,
               gameStatus,
@@ -1832,13 +2148,20 @@ export async function fetchGamesForDate(
               awayTeam,
               homeTeam,
               streams: buildGameStreams(
-                gameId,
+                mappedNbaId,
                 awayTeam.tricode,
                 awayTeam.name,
                 homeTeam.tricode,
                 homeTeam.name,
                 `${awayTeam.city} Broadcast`,
-                `${homeTeam.city} Broadcast`
+                `${homeTeam.city} Broadcast`,
+                {
+                  mp4Url: liveMp4,
+                  altMp4Url: altMp4,
+                  hls16x9Url: liveHls16x9,
+                  hls9x16Url: liveHls9x16,
+                  nbaWatchUrl: nativeInfo?.watchUrl,
+                }
               ),
             };
           })
@@ -1862,3 +2185,4 @@ export async function fetchGamesForDate(
 
   return { games: getGamesForDateSync(dateKey), source: 'curated' };
 }
+

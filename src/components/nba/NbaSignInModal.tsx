@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { NbaUserSession } from '../../types/nba';
 import {
+  cacheNbaCredentialsInNativeBridge,
   hasNativeAndroidBridge,
   openNbaTopLevelInApp,
   promptNativeAndroidInput,
@@ -124,6 +125,7 @@ export const NbaSignInModal: React.FC<NbaSignInModalProps> = ({
     }
 
     setIsSubmitting(true);
+    cacheNbaCredentialsInNativeBridge(trimmedEmail, password);
     logDiagnosticEvent('NBA_AUTH_SUBMIT', `Signing in NBA ID for ${trimmedEmail}`);
 
     setTimeout(() => {
@@ -145,6 +147,9 @@ export const NbaSignInModal: React.FC<NbaSignInModalProps> = ({
   };
 
   const handleLaunchOfficialNbaWebLogin = () => {
+    if (email.trim() || password) {
+      cacheNbaCredentialsInNativeBridge(email.trim(), password);
+    }
     const signInUrl = 'https://www.nba.com/account/sign-in';
     logDiagnosticEvent(
       'NBA_OFFICIAL_WEB_LOGIN',

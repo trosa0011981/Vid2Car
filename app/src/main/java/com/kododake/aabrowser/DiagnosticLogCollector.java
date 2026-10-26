@@ -183,6 +183,15 @@ public class DiagnosticLogCollector {
                     if (line.contains("[AA_INTERNAL_RAW]")) {
                         continue;
                     }
+                    // Filter high-frequency Android 16/17 WebView frame-rate & choreographer spam
+                    // (e.g. "I/View: setRequestedFrameRate frameRate=-4.0" logged 60x/sec on Samsung SM-F966B)
+                    if (line.contains("setRequestedFrameRate")
+                            || line.contains("setFrameRateCategory")
+                            || line.contains("ViewRootImpl")
+                            || line.contains("BLASTBufferQueue")
+                            || line.contains("InsetsController")) {
+                        continue;
+                    }
                     appendRawLine("[LOGCAT] " + line);
                 }
             } catch (Exception e) {

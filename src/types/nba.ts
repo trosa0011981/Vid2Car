@@ -11,6 +11,9 @@ export interface NbaStreamFeed {
   isCameraZoomed?: boolean;
   durationLabel?: string;
   inAppWatchPath: string;
+  videoUrl?: string;
+  hlsUrl?: string;
+  fallbackVideoUrl?: string;
 }
 
 export interface NbaPlayerLeader {
