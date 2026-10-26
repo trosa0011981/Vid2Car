@@ -9,6 +9,11 @@
 .cxx
 local.properties
 /app/build/
+/app/src/main/assets/www/
+/node_modules/
+/dist/
+/.build-outputs/
+/release-apks/
 *.jks
 *.keystore
 *.log

@@ -1,0 +1,14 @@
+buildscript {
+    ext {
+        agpVersion = project.hasProperty('agpVersion')
+            ? project.property('agpVersion')
+            : (gradle.gradleVersion.startsWith('9.') ? '9.1.1' : '8.7.3')
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:${agpVersion}"
+    }
+}

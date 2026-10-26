@@ -1,0 +1,70 @@
+apply plugin: 'com.android.application'
+
+def resolvedCompileSdk = project.hasProperty('compileSdkVersion')
+    ? (project.property('compileSdkVersion') as Integer)
+    : 36
+
+def resolvedTargetSdk = project.hasProperty('targetSdkVersion')
+    ? (project.property('targetSdkVersion') as Integer)
+    : 35
+
+android {
+    namespace 'com.kododake.aabrowser'
+    compileSdk resolvedCompileSdk
+
+    defaultConfig {
+        applicationId "com.kododake.aabrowser"
+        minSdk 26
+        targetSdk resolvedTargetSdk
+        versionCode 34
+        versionName "3.4.0-nba"
+    }
+
+    signingConfigs {
+        debug {
+            def rootKeystore = rootProject.file("debug.keystore")
+            if (rootKeystore.exists()) {
+                storeFile rootKeystore
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            // Sign release APK with debug keystore by default so the GitHub Release APK installs out-of-the-box
+            signingConfig signingConfigs.debug
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+tasks.register('npmBuild', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'npm', 'run', 'build'
+}
+
+tasks.register('bundleWebAssets', Copy) {
+    dependsOn 'npmBuild'
+    from("${rootProject.projectDir}/dist")
+    into("${projectDir}/src/main/assets/www")
+}
+
+preBuild.dependsOn('bundleWebAssets')

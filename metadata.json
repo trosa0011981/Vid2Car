@@ -1,0 +1,8 @@
+{
+  "name": "AA Browser - Automotive Web Experience",
+  "description": "Material 3 Expressive WebView browser designed specifically for car screens and Android Auto head units with tab management, custom start page, and parked entertainment.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

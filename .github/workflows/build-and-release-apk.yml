@@ -1,0 +1,122 @@
+name: Build APK & Create GitHub Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-and-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk-and-release:
+    name: Compile Android APK & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Web Dependencies & Build NBA League Pass Wrapper
+        run: |
+          npm install
+          npm run build
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 35 & Build Tools
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Prepare Signing Keystore
+        run: |
+          if [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Compile Signed Release & Debug APKs
+        run: |
+          gradle assembleRelease assembleDebug \
+            -PagpVersion=8.7.3 \
+            -PcompileSdkVersion=35 \
+            -PtargetSdkVersion=35 \
+            --no-daemon --stacktrace
+
+      - name: Prepare Release APK Artifacts
+        id: prepare_apk
+        run: |
+          mkdir -p release-apks
+          cp app/build/outputs/apk/release/app-release.apk release-apks/AA-Browser-NBA-LeaguePass-v3.4.0.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-apks/AA-Browser-NBA-LeaguePass-v3.4.0-debug.apk
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          else
+            TAG_NAME="v3.4.0-nba.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          ls -lh release-apks/
+
+      - name: Upload APK to Workflow Run Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AA-Browser-NBA-LeaguePass-APK
+          path: release-apks/*.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release & Attach APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prepare_apk.outputs.tag_name }}
+          name: "AA Browser v3.4.0 (NBA League Pass Edition) - Build #${{ github.run_number }}"
+          body: |
+            ## 🏀 AA Browser — NBA League Pass Car Edition (`${{ steps.prepare_apk.outputs.tag_name }}`)
+
+            ### What's Included in this APK:
+            - **NBA League Pass Start Page Tile**: Quick-link tile right alongside YouTube on the main landing page.
+            - **100% In-App Navigation (No Native Phone App Hijacking)**: All `nba.com` URLs, logins, and streams stay inside AA Browser and block `intent://` / Android App Links from opening the native NBA phone app.
+            - **Custom NBA Games & Scores Tile Wrapper**: Touch-friendly automotive game tiles with official team logos, records, `PTS / REB / AST` game leaders, 7-day date scroller, and **Hide Scores** spoiler toggle.
+            - **Multi-Stream Selector & Widevine DRM Support**: Select **Home Team Stream**, **Away Team Stream**, **Mobile View Stream** (zoomed camera), or **Full Game Recap** with hardware-accelerated Widevine DRM (`RESOURCE_PROTECTED_MEDIA_ID`) enabled.
+            - **Top-Right NBA ID Sign-In**: Built-in NBA ID sign-in dropdown and authentication modal.
+
+            ### 📥 Installation
+            Download **`AA-Browser-NBA-LeaguePass-v3.4.0.apk`** from the Assets section below and install it on your Android device or Android Auto head unit.
+          files: |
+            release-apks/AA-Browser-NBA-LeaguePass-v3.4.0.apk
+            release-apks/AA-Browser-NBA-LeaguePass-v3.4.0-debug.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
