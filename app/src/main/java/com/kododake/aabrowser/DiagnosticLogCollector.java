@@ -107,7 +107,8 @@ public class DiagnosticLogCollector {
         sb.append("Installer Source: ").append(getInstallerPackageInfo()).append("\n");
         sb.append("Car Mode Status: ").append(getCarModeDescription()).append("\n");
         sb.append("Connected Displays: ").append(getDisplaysSummaryText()).append("\n");
-        sb.append("Manifest Config: automotiveApp=media (notification removed), appCategory=game, CAR_LAUNCHER+NAVIGATION+APP_MAPS\n");
+        sb.append("Car Surface Status: ").append(CarSessionRegistry.getActiveCarSurfaceInfo()).append("\n");
+        sb.append("Manifest Config: automotiveApp=template, CarAppService=NAVIGATION+ACCESS_SURFACE (In-Motion Enabled)\n");
         sb.append("================================================================");
         logEvent("SESSION_INIT", sb.toString());
     }
@@ -401,18 +402,18 @@ public class DiagnosticLogCollector {
     public String getSystemSummaryJson() {
         try {
             JSONObject json = new JSONObject();
-            json.put("appVersion", "3.4.1-nba");
+            json.put("appVersion", "3.5.0-nba");
             json.put("packageName", appContext.getPackageName());
             json.put("device", Build.MANUFACTURER + " " + Build.MODEL);
             json.put("androidVersion", "Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")");
             json.put("installerSource", getInstallerPackageInfo());
-            json.put("carModeStatus", getCarModeDescription());
+            json.put("carModeStatus", getCarModeDescription() + " | Surface: " + CarSessionRegistry.getActiveCarSurfaceInfo());
             json.put("displaysSummary", getDisplaysSummaryText());
             json.put("logFileBytes", logFile.exists() ? logFile.length() : 0);
-            json.put("automotiveDesc", "media (notification removed)");
-            json.put("appCategory", "game + distractionOptimized=true");
-            json.put("intentCategories", "LAUNCHER, CAR_LAUNCHER, NAVIGATION, APP_MAPS");
-            json.put("widevineL3Enforcer", "Active (SW_SECURE_DECODE)");
+            json.put("automotiveDesc", "template (CarAppService NAVIGATION + ACCESS_SURFACE)");
+            json.put("appCategory", "maps + distractionOptimized=true (In-Motion Enabled)");
+            json.put("intentCategories", "CarAppService(NAVIGATION), LAUNCHER, CAR_LAUNCHER, APP_MAPS");
+            json.put("widevineL3Enforcer", "Active (SW_SECURE_DECODE on VirtualDisplay)");
 
             DisplayManager dm = (DisplayManager) appContext.getSystemService(Context.DISPLAY_SERVICE);
             JSONArray displayArr = new JSONArray();

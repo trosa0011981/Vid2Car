@@ -78,14 +78,14 @@ public class MainActivity extends Activity {
      * initializes the HTML5 Widevine web video player directly inside AA Browser instead of
      * prompting to open the mobile NBA Android app.
      */
-    private static final String DESKTOP_CHROME_UA =
+    public static final String DESKTOP_CHROME_UA =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
     /**
      * Exact Widevine L3 (SW_SECURE_DECODE) Enforcer script from kododake/AABrowser so DRM video
      * renders properly on Android Auto virtual displays without HW_SECURE_ALL surface failure.
      */
-    private static final String DRM_L3_ENFORCER_JS =
+    public static final String DRM_L3_ENFORCER_JS =
             "(function() {\n" +
             "    try {\n" +
             "        const host = window.location.hostname;\n" +
@@ -172,6 +172,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         diagnostics = DiagnosticLogCollector.getInstance(this);
+        savedNbaEmail = CarSessionRegistry.getSavedNbaEmail(this);
+        savedNbaPassword = CarSessionRegistry.getSavedNbaPassword(this);
         diagnostics.logIntent("MainActivity.onCreate", getIntent(), getActiveDisplaySafe());
         diagnostics.logConfiguration("MainActivity.onCreate", getResources().getConfiguration());
 
@@ -589,6 +591,8 @@ public class MainActivity extends Activity {
                 if (diagnostics != null) {
                     diagnostics.logEvent("NBA_BRIDGE", "Opening top-level NBA URL in WebView: " + safeUrl);
                 }
+                CarSessionRegistry.setLastNbaUrl(MainActivity.this, safeUrl);
+                CarSessionRegistry.loadUrlOnCarDisplayIfActive(safeUrl);
                 if (topNbaReturnBar != null) {
                     topNbaReturnBar.setVisibility(View.VISIBLE);
                 }
@@ -605,8 +609,9 @@ public class MainActivity extends Activity {
         public void saveNbaCredentials(final String email, final String password) {
             savedNbaEmail = email != null ? email : "";
             savedNbaPassword = password != null ? password : "";
+            CarSessionRegistry.saveNbaCredentials(MainActivity.this, savedNbaEmail, savedNbaPassword);
             if (diagnostics != null) {
-                diagnostics.logEvent("NBA_AUTH", "Cached NBA ID credentials for in-app WebView autofill (" + savedNbaEmail + ")");
+                diagnostics.logEvent("NBA_AUTH", "Cached NBA ID credentials for in-app & Car Surface autofill (" + savedNbaEmail + ")");
             }
         }
 
@@ -842,7 +847,12 @@ public class MainActivity extends Activity {
         if (diagnostics != null) {
             diagnostics.logEvent("LIFECYCLE", "MainActivity.onPause()");
         }
-        if (webView != null) {
+        // Only pause phone WebView if Android Auto Car Surface Presentation is NOT active,
+        // ensuring locking the phone screen while driving never throttles Car Surface video playback
+        WebViewPresentation activeCar = CarSessionRegistry.getActiveCarPresentation();
+        if (activeCar != null) {
+            activeCar.onSurfaceActive();
+        } else if (webView != null) {
             webView.onPause();
         }
         super.onPause();

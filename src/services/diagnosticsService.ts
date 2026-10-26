@@ -140,7 +140,7 @@ class DiagnosticsService {
         const parsed = JSON.parse(raw);
         return {
           isNativeAndroidBridge: true,
-          appVersion: parsed.appVersion || '3.4.1-nba',
+          appVersion: parsed.appVersion || '3.5.0-nba',
           packageName: parsed.packageName || 'com.kododake.aabrowser',
           device: parsed.device || 'Android Device',
           androidVersion: parsed.androidVersion || 'Android',
@@ -148,10 +148,10 @@ class DiagnosticsService {
           carModeStatus: parsed.carModeStatus || 'UI_MODE_TYPE_NORMAL',
           displaysSummary: parsed.displaysSummary || '1 display',
           logFileBytes: parsed.logFileBytes || 0,
-          automotiveDesc: parsed.automotiveDesc || 'media (notification removed)',
-          appCategory: parsed.appCategory || 'game + distractionOptimized=true',
-          intentCategories: parsed.intentCategories || 'LAUNCHER, CAR_LAUNCHER, NAVIGATION, APP_MAPS',
-          widevineL3Enforcer: parsed.widevineL3Enforcer || 'Active (SW_SECURE_DECODE)',
+          automotiveDesc: parsed.automotiveDesc || 'template (CarAppService NAVIGATION + ACCESS_SURFACE)',
+          appCategory: parsed.appCategory || 'maps + distractionOptimized=true (In-Motion Enabled)',
+          intentCategories: parsed.intentCategories || 'CarAppService(NAVIGATION), LAUNCHER, CAR_LAUNCHER, APP_MAPS',
+          widevineL3Enforcer: parsed.widevineL3Enforcer || 'Active (SW_SECURE_DECODE on VirtualDisplay)',
           displays: Array.isArray(parsed.displays) ? parsed.displays : [],
         };
       } catch {
@@ -162,20 +162,20 @@ class DiagnosticsService {
     const localLogs = this.getLocalLogsText();
     return {
       isNativeAndroidBridge: false,
-      appVersion: '3.4.1-nba',
+      appVersion: '3.5.0-nba',
       packageName: 'com.kododake.aabrowser',
       device: typeof navigator !== 'undefined' ? navigator.platform || 'Web / Preview Host' : 'Host',
       androidVersion: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 72) : 'Web Preview',
       installerSource: 'APK Build Ready (KingInstaller / Obtainium compatible)',
-      carModeStatus: 'Auto-Detect on Android Auto Connect (UI_MODE_TYPE_CAR)',
+      carModeStatus: 'Auto-Detect on Android Auto Connect (CarAppService NAVIGATION)',
       displaysSummary: `Display#0 ["Primary Viewport" ${
         typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : '800x480'
       }]`,
       logFileBytes: new Blob([localLogs]).size,
-      automotiveDesc: 'media (notification removed)',
-      appCategory: 'game + distractionOptimized=true',
-      intentCategories: 'LAUNCHER, CAR_LAUNCHER, NAVIGATION, APP_MAPS',
-      widevineL3Enforcer: 'Active (SW_SECURE_DECODE)',
+      automotiveDesc: 'template (CarAppService NAVIGATION + ACCESS_SURFACE)',
+      appCategory: 'maps + distractionOptimized=true (In-Motion Enabled)',
+      intentCategories: 'CarAppService(NAVIGATION), LAUNCHER, CAR_LAUNCHER, APP_MAPS',
+      widevineL3Enforcer: 'Active (SW_SECURE_DECODE on VirtualDisplay)',
       displays: [
         {
           id: 0,
@@ -210,10 +210,10 @@ class DiagnosticsService {
 
     const header = [
       '================================================================',
-      'AA BROWSER (NBA LEAGUE PASS EDITION) v3.4.1-nba DIAGNOSTIC LOGS',
+      'AA BROWSER (NBA LEAGUE PASS EDITION) v3.5.0-nba DIAGNOSTIC LOGS',
       'Auto-Collector Mode: ALWAYS-ON (Zero-Click in Car)',
-      'Manifest Fix: <uses name="media" /> (removed <uses name="notification" />)',
-      'Projection Categories: appCategory="game" | distractionOptimized="true" | CAR_LAUNCHER | NAVIGATION | APP_MAPS',
+      'In-Motion Engine: CarAppService(NAVIGATION) + SurfaceCallback + VirtualDisplay Presentation',
+      'DRM Pipeline: Widevine L3 (SW_SECURE_DECODE) + In-Motion Navigation Surface',
       '================================================================',
     ].join('\n');
 

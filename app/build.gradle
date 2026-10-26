@@ -16,8 +16,8 @@ android {
         applicationId "com.kododake.aabrowser"
         minSdk 26
         targetSdk resolvedTargetSdk
-        versionCode 36
-        versionName "3.4.2-nba"
+        versionCode 37
+        versionName "3.5.0-nba"
     }
 
     signingConfigs {
