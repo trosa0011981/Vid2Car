@@ -2,20 +2,28 @@ package com.kododake.aabrowser;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.InputType;
+import android.util.TypedValue;
 import android.view.Display;
+import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
 import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
@@ -25,10 +33,16 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+
+import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,7 +57,10 @@ import java.util.List;
  *    Intent, WebView, Widevine DRM, and logcat events to internal storage.
  * 3. Hardware-accelerated WebView with Widevine DRM (RESOURCE_PROTECTED_MEDIA_ID) and L3
  *    SW_SECURE_DECODE enforcer for Android Auto virtual displays.
- * 4. Strict In-App URL interception: blocks Android App Links / intent:// / nba:// deep links
+ * 4. Top-level NBA.com navigation bridge (bypassing X-Frame-Options / CSP frame-ancestors so
+ *    official NBA.com sign-in and streams load without a broken Android WebView iframe icon)
+ *    with a native floating Car Return Bar.
+ * 5. Strict In-App URL interception: blocks Android App Links / intent:// / nba:// deep links
  *    from ever opening the native NBA app on the user's phone.
  */
 public class MainActivity extends Activity {
@@ -128,6 +145,9 @@ public class MainActivity extends Activity {
     private View customFullscreenView;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private FrameLayout rootContainer;
+    private LinearLayout mainVerticalLayout;
+    private LinearLayout topNbaReturnBar;
+    private TextView topBarTitleView;
     private DiagnosticLogCollector diagnostics;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
@@ -141,18 +161,35 @@ public class MainActivity extends Activity {
 
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
 
         rootContainer = new FrameLayout(this);
         rootContainer.setBackgroundColor(Color.BLACK);
 
+        mainVerticalLayout = new LinearLayout(this);
+        mainVerticalLayout.setOrientation(LinearLayout.VERTICAL);
+        mainVerticalLayout.setBackgroundColor(Color.BLACK);
+
+        // Build native top bar for returning from top-level NBA.com sign-in / stream pages
+        topNbaReturnBar = buildTopNbaReturnBar();
+        topNbaReturnBar.setVisibility(View.GONE);
+        mainVerticalLayout.addView(
+                topNbaReturnBar,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
 
-        // Expose automatic diagnostic log collector to the React UI
+        // Expose automatic diagnostic log collector and native NBA bridge to the React UI
         webView.addJavascriptInterface(diagnostics, "AndroidDiagnostics");
+        webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -246,13 +283,16 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 diagnostics.logEvent("WEBVIEW_NAV", "onPageStarted: " + url);
+                updateTopBarVisibility(url);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 diagnostics.logEvent("WEBVIEW_NAV", "onPageFinished: " + url);
+                updateTopBarVisibility(url);
                 try {
+                    CookieManager.getInstance().flush();
                     view.evaluateJavascript(DRM_L3_ENFORCER_JS, null);
                 } catch (Exception ignored) {
                 }
@@ -328,7 +368,7 @@ public class MainActivity extends Activity {
                 }
                 customFullscreenView = view;
                 customViewCallback = callback;
-                webView.setVisibility(View.GONE);
+                mainVerticalLayout.setVisibility(View.GONE);
                 rootContainer.addView(
                         customFullscreenView,
                         new FrameLayout.LayoutParams(
@@ -348,12 +388,18 @@ public class MainActivity extends Activity {
                     customViewCallback.onCustomViewHidden();
                     customViewCallback = null;
                 }
-                webView.setVisibility(View.VISIBLE);
+                mainVerticalLayout.setVisibility(View.VISIBLE);
             }
         });
 
+        LinearLayout.LayoutParams webViewParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1.0f);
+        mainVerticalLayout.addView(webView, webViewParams);
+
         rootContainer.addView(
-                webView,
+                mainVerticalLayout,
                 new FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT));
@@ -362,6 +408,189 @@ public class MainActivity extends Activity {
 
         webView.loadUrl(BUNDLED_APP_URL);
         handleIncomingIntent(getIntent());
+    }
+
+    /**
+     * Native top toolbar shown when MainActivity's WebView navigates directly to https://www.nba.com
+     * (e.g. Official NBA ID Sign-In or direct stream playback) so the user can return to the Car Wrapper
+     * with one tap and no X-Frame-Options blocking.
+     */
+    private LinearLayout buildTopNbaReturnBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(Color.parseColor("#12151E"));
+        int padH = dpToPx(12);
+        int padV = dpToPx(8);
+        bar.setPadding(padH, padV, padH, padV);
+
+        Button backBtn = new Button(this);
+        backBtn.setText("← Return to NBA Car Wrapper");
+        backBtn.setTextColor(Color.BLACK);
+        backBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        backBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        backBtn.setAllCaps(false);
+        GradientDrawable btnBg = new GradientDrawable();
+        btnBg.setColor(Color.parseColor("#F59E0B"));
+        btnBg.setCornerRadius(dpToPx(10));
+        backBtn.setBackground(btnBg);
+        backBtn.setPadding(dpToPx(14), dpToPx(6), dpToPx(14), dpToPx(6));
+        backBtn.setOnClickListener(v -> returnToBundledWrapper());
+
+        topBarTitleView = new TextView(this);
+        topBarTitleView.setText("Official NBA.com (In-App Session · Native NBA App Blocked)");
+        topBarTitleView.setTextColor(Color.parseColor("#D1D5DB"));
+        topBarTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        topBarTitleView.setSingleLine(true);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        titleParams.setMargins(dpToPx(12), 0, dpToPx(12), 0);
+
+        Button reloadBtn = new Button(this);
+        reloadBtn.setText("Reload");
+        reloadBtn.setTextColor(Color.WHITE);
+        reloadBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        reloadBtn.setAllCaps(false);
+        GradientDrawable reloadBg = new GradientDrawable();
+        reloadBg.setColor(Color.parseColor("#262936"));
+        reloadBg.setCornerRadius(dpToPx(8));
+        reloadBtn.setBackground(reloadBg);
+        reloadBtn.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        reloadBtn.setOnClickListener(v -> {
+            if (webView != null) {
+                webView.reload();
+            }
+        });
+
+        bar.addView(backBtn);
+        bar.addView(topBarTitleView, titleParams);
+        bar.addView(reloadBtn);
+        return bar;
+    }
+
+    private void updateTopBarVisibility(String url) {
+        if (topNbaReturnBar == null || url == null) {
+            return;
+        }
+        runOnUiThread(() -> {
+            boolean isExternalWeb = !url.startsWith("file:///android_asset/");
+            topNbaReturnBar.setVisibility(isExternalWeb ? View.VISIBLE : View.GONE);
+            if (isExternalWeb && topBarTitleView != null) {
+                topBarTitleView.setText("In-App WebView: " + url);
+            }
+        });
+    }
+
+    private void returnToBundledWrapper() {
+        runOnUiThread(() -> {
+            try {
+                CookieManager.getInstance().flush();
+            } catch (Exception ignored) {
+            }
+            if (diagnostics != null) {
+                diagnostics.logEvent("NBA_BRIDGE", "Returning from top-level NBA page to bundled Car Wrapper");
+            }
+            if (topNbaReturnBar != null) {
+                topNbaReturnBar.setVisibility(View.GONE);
+            }
+            if (webView != null) {
+                webView.loadUrl(BUNDLED_APP_URL);
+            }
+        });
+    }
+
+    private int dpToPx(int dp) {
+        return Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                dp,
+                getResources().getDisplayMetrics()));
+    }
+
+    /**
+     * Native JavaScript interface exposed as window.AndroidBridge.
+     */
+    public class AndroidBridge {
+
+        @JavascriptInterface
+        public void openNbaTopLevel(final String targetUrl) {
+            runOnUiThread(() -> {
+                if (webView == null) return;
+                String safeUrl = (targetUrl != null && (targetUrl.startsWith("https://") || targetUrl.startsWith("http://")))
+                        ? targetUrl
+                        : "https://www.nba.com/account/sign-in";
+                if (diagnostics != null) {
+                    diagnostics.logEvent("NBA_BRIDGE", "Opening top-level NBA URL in WebView: " + safeUrl);
+                }
+                if (topNbaReturnBar != null) {
+                    topNbaReturnBar.setVisibility(View.VISIBLE);
+                }
+                webView.loadUrl(safeUrl);
+            });
+        }
+
+        @JavascriptInterface
+        public void returnToNbaWrapper() {
+            returnToBundledWrapper();
+        }
+
+        @JavascriptInterface
+        public String getNbaCookieStatus() {
+            try {
+                CookieManager cm = CookieManager.getInstance();
+                String nbaCookies = cm.getCookie("https://www.nba.com");
+                String idCookies = cm.getCookie("https://id.nba.com");
+                String combined = (nbaCookies != null ? nbaCookies : "") + ";" + (idCookies != null ? idCookies : "");
+                boolean hasAuthCookie = combined.contains("nba") || combined.contains("sid") || combined.contains("token") || combined.contains("auth");
+                JSONObject obj = new JSONObject();
+                obj.put("hasCookies", !combined.replace(";", "").trim().isEmpty());
+                obj.put("hasAuthCookie", hasAuthCookie);
+                obj.put("cookieLength", combined.length());
+                return obj.toString();
+            } catch (Exception e) {
+                return "{\"hasCookies\":false,\"hasAuthCookie\":false,\"cookieLength\":0}";
+            }
+        }
+
+        @JavascriptInterface
+        public void promptNativeTextInput(final String fieldId, final String title, final String currentValue, final boolean isPassword) {
+            runOnUiThread(() -> {
+                try {
+                    AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+                    builder.setTitle(title != null ? title : "Enter Text");
+
+                    final EditText input = new EditText(MainActivity.this);
+                    input.setText(currentValue != null ? currentValue : "");
+                    input.setSingleLine(true);
+                    input.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+                    if (isPassword) {
+                        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    } else {
+                        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+                    }
+                    int pad = dpToPx(16);
+                    input.setPadding(pad, pad, pad, pad);
+                    builder.setView(input);
+
+                    builder.setPositiveButton("Done", (dialog, which) -> {
+                        String val = input.getText() != null ? input.getText().toString() : "";
+                        String escapedField = JSONObject.quote(fieldId != null ? fieldId : "");
+                        String escapedVal = JSONObject.quote(val);
+                        if (webView != null) {
+                            webView.evaluateJavascript(
+                                    "if (window.__onNativeInputResult) { window.__onNativeInputResult(" + escapedField + ", " + escapedVal + "); }",
+                                    null);
+                        }
+                    });
+                    builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+
+                    AlertDialog dialog = builder.create();
+                    dialog.show();
+                } catch (Exception e) {
+                    if (diagnostics != null) {
+                        diagnostics.logEvent("NATIVE_INPUT_ERR", e.getMessage());
+                    }
+                }
+            });
+        }
     }
 
     private Display getActiveDisplaySafe() {
@@ -422,9 +651,20 @@ public class MainActivity extends Activity {
             webView.getWebChromeClient().onHideCustomView();
             return;
         }
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-            return;
+        if (webView != null) {
+            String currentUrl = webView.getUrl();
+            if (currentUrl != null && !currentUrl.startsWith("file:///android_asset/")) {
+                if (webView.canGoBack()) {
+                    webView.goBack();
+                } else {
+                    returnToBundledWrapper();
+                }
+                return;
+            }
+            if (webView.canGoBack()) {
+                webView.goBack();
+                return;
+            }
         }
         super.onBackPressed();
     }

@@ -128,9 +128,14 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Record user interaction (for FAB auto-hide)
+  // Record user interaction (for FAB auto-hide), throttled and skipped while typing in inputs
   const registerInteraction = useCallback(() => {
-    setLastInteractionTime(Date.now());
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+      return;
+    }
+    const now = Date.now();
+    setLastInteractionTime((prev) => (now - prev > 3000 ? now : prev));
   }, []);
 
   // Navigation logic

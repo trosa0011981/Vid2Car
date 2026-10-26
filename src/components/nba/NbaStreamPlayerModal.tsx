@@ -15,8 +15,11 @@ import {
   Info,
   RotateCcw,
   Lock,
+  ExternalLink,
+  Globe,
 } from 'lucide-react';
 import { NbaGame, NbaStreamFeed, NbaStreamFeedType, NbaUserSession } from '../../types/nba';
+import { openNbaTopLevelInApp } from '../../services/nbaService';
 import { NbaTeamLogo } from './NbaTeamLogo';
 
 interface NbaStreamPlayerModalProps {
@@ -43,7 +46,7 @@ export const NbaStreamPlayerModal: React.FC<NbaStreamPlayerModalProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [playerSurfaceMode, setPlayerSurfaceMode] = useState<'stream' | 'sandboxed_iframe'>('stream');
+  const [playerSurfaceMode, setPlayerSurfaceMode] = useState<'stream' | 'official_web'>('stream');
   const videoContainerRef = useRef<HTMLDivElement>(null);
 
   const selectedStream: NbaStreamFeed =
@@ -160,14 +163,17 @@ export const NbaStreamPlayerModal: React.FC<NbaStreamPlayerModalProps> = ({
                   <button
                     onClick={() =>
                       setPlayerSurfaceMode(
-                        playerSurfaceMode === 'stream' ? 'sandboxed_iframe' : 'stream'
+                        playerSurfaceMode === 'stream' ? 'official_web' : 'stream'
                       )
                     }
-                    className="px-3 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 font-semibold bouncy-tap"
+                    className="px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 font-semibold bouncy-tap flex items-center gap-1.5"
                   >
-                    {playerSurfaceMode === 'stream'
-                      ? 'Switch to Embedded Web Frame'
-                      : 'Switch to Car Stream Player'}
+                    <Globe className="w-3.5 h-3.5 text-amber-400" />
+                    <span>
+                      {playerSurfaceMode === 'stream'
+                        ? 'Official NBA.com Full-Page Stream'
+                        : 'Return to Car Stream Player'}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -216,25 +222,35 @@ export const NbaStreamPlayerModal: React.FC<NbaStreamPlayerModalProps> = ({
               ref={videoContainerRef}
               className="relative w-full aspect-video max-h-[540px] rounded-3xl overflow-hidden bg-black border border-neutral-800 shadow-2xl flex flex-col justify-between"
             >
-              {playerSurfaceMode === 'sandboxed_iframe' ? (
-                <div className="w-full h-full relative flex flex-col">
-                  <iframe
-                    src={selectedStream.inAppWatchPath}
-                    title={`${game.awayTeam.name} vs ${game.homeTeam.name} - ${selectedStream.label}`}
-                    sandbox="allow-same-origin allow-scripts allow-forms allow-presentation"
-                    allow="encrypted-media; autoplay; fullscreen"
-                    className="w-full flex-1 border-none bg-black"
-                  />
-                  <div className="bg-neutral-950/95 border-t border-neutral-800 px-4 py-2 flex items-center justify-between text-xs text-neutral-400">
-                    <span>
-                      In-App Sandboxed Stream View (Mobile NBA App Deep-Links Blocked)
-                    </span>
-                    <button
-                      onClick={() => setPlayerSurfaceMode('stream')}
-                      className="px-3 py-1 rounded-lg bg-amber-500 text-black font-bold"
-                    >
-                      Return to Car Stream Player
-                    </button>
+              {playerSurfaceMode === 'official_web' ? (
+                <div className="w-full h-full relative flex flex-col items-center justify-center p-6 text-center bg-gradient-to-b from-[#131826] via-[#0B0E17] to-black">
+                  <div className="max-w-lg space-y-4">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 mx-auto">
+                      <Globe className="w-6 h-6" />
+                    </div>
+                    <h4 className="text-lg font-extrabold text-white">
+                      Launch Official NBA.com Stream ({selectedStream.label})
+                    </h4>
+                    <p className="text-xs text-neutral-400 leading-relaxed">
+                      Because NBA.com blocks embedded <code className="text-amber-300">&lt;iframe&gt;</code> players via <code className="text-amber-300">X-Frame-Options: SAMEORIGIN</code>, tap below to open this matchup directly as the top-level page inside AA Browser&apos;s Widevine L3 WebView (with a top bar to return here anytime).
+                    </p>
+                    <div className="flex items-center justify-center gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => openNbaTopLevelInApp(selectedStream.inAppWatchPath)}
+                        className="min-h-[48px] px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs flex items-center gap-2 shadow-xl bouncy-tap"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        <span>Open Stream on NBA.com (In-App)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlayerSurfaceMode('stream')}
+                        className="min-h-[48px] px-5 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-xs border border-neutral-700 bouncy-tap"
+                      >
+                        Use Car Stream Player
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : !isPlaying ? (

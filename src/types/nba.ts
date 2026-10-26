@@ -8,11 +8,13 @@ export interface NbaStreamFeed {
   language: string;
   resolution: string;
   isZoomedMobileView?: boolean;
+  isCameraZoomed?: boolean;
   durationLabel?: string;
   inAppWatchPath: string;
 }
 
 export interface NbaPlayerLeader {
+  playerId?: string;
   name: string;
   jerseyNumber: string;
   position: string;
@@ -30,6 +32,7 @@ export interface NbaTeamInfo {
   record: string;
   score: number;
   primaryColor: string;
+  secondaryColor?: string;
   leader: NbaPlayerLeader;
   quarterScores?: number[];
 }
@@ -42,11 +45,14 @@ export interface NbaGame {
   dateKey: string; // e.g. '2026-10-25'
   gameStatus: NbaGameStatus;
   gameStatusText: string; // e.g. 'FINAL', 'Q4 02:14', '7:30 PM ET'
+  period?: number;
+  gameClock?: string;
   arena: string;
   awayTeam: NbaTeamInfo;
   homeTeam: NbaTeamInfo;
   isLeaguePass: boolean;
   nationalBroadcast?: string;
+  nationalBroadcaster?: string;
   recapDuration?: string;
   streams: NbaStreamFeed[];
 }
@@ -64,6 +70,7 @@ export interface NbaUserSession {
   email: string;
   displayName: string;
   subscriptionTier: string;
-  favoriteTeams: string[]; // array of tricodes, e.g. ['LAL']
+  favoriteTeams?: string[]; // array of tricodes, e.g. ['LAL']
   lastSignInAt?: string;
+  lastLoginAt?: number;
 }

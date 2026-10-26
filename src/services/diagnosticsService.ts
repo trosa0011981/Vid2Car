@@ -250,3 +250,8 @@ class DiagnosticsService {
 }
 
 export const diagnosticsService = new DiagnosticsService();
+
+export function logDiagnosticEvent(category: string, message: string): void {
+  diagnosticsService.logEvent(category, message);
+}
+

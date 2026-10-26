@@ -1,918 +1,776 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
-  Play,
-  Star,
-  Calendar,
   ChevronLeft,
   ChevronRight,
-  User,
-  LogOut,
   Eye,
   EyeOff,
+  UserCheck,
+  User,
   Tv,
+  ShieldCheck,
+  Play,
+  BarChart3,
+  Info,
   Globe,
-  HelpCircle,
-  Search,
-  BarChart2,
-  FileText,
-  Lock,
-  Sparkles,
-  Terminal,
+  SlidersHorizontal,
+  Calendar,
+  ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { NbaGame, NbaUserSession } from '../../types/nba';
 import {
-  NBA_DATE_STRIP,
-  CURATED_GAMES_BY_DATE,
+  fetchGamesForDate,
+  getGamesForDateSync,
   loadHideScoresPref,
-  saveHideScoresPref,
   loadNbaSession,
+  openNbaTopLevelInApp,
+  saveHideScoresPref,
   saveNbaSession,
 } from '../../services/nbaService';
+import { logDiagnosticEvent } from '../../services/diagnosticsService';
 import { NbaTeamLogo } from './NbaTeamLogo';
 import { NbaSignInModal } from './NbaSignInModal';
 import { NbaStreamPlayerModal } from './NbaStreamPlayerModal';
-import { DiagnosticLogsModal } from '../diagnostics/DiagnosticLogsModal';
-import { diagnosticsService } from '../../services/diagnosticsService';
 
 interface NbaLeaguePassWrapperProps {
   url: string;
   drmL3Enforcer: boolean;
-  onNavigate?: (url: string) => void;
+  onNavigate: (url: string) => void;
 }
 
-function getGamesForDateSync(dateKey: string): NbaGame[] {
-  if (dateKey === '2026-10-26') {
-    return [
-      ...(CURATED_GAMES_BY_DATE['2026-10-25'] || []),
-      ...(CURATED_GAMES_BY_DATE['2026-10-26'] || []),
-    ];
+const DEFAULT_SHOWCASE_DATES = [
+  '2026-10-25',
+  '2026-10-26',
+  '2026-10-27',
+  '2026-10-28',
+  '2026-10-29',
+  '2026-10-30',
+  '2026-10-31',
+];
+
+function addDaysToDateKey(dateKey: string, deltaDays: number): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, (d || 1) + deltaDays);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+function getTodayDateKey(): string {
+  const now = new Date();
+  const yy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+function buildSevenDayWindow(centerOrSelectedDate: string): string[] {
+  if (DEFAULT_SHOWCASE_DATES.includes(centerOrSelectedDate)) {
+    return DEFAULT_SHOWCASE_DATES;
   }
-  if (CURATED_GAMES_BY_DATE[dateKey]) {
-    return CURATED_GAMES_BY_DATE[dateKey];
+  const days: string[] = [];
+  for (let offset = -3; offset <= 3; offset++) {
+    days.push(addDaysToDateKey(centerOrSelectedDate, offset));
   }
-  const baseGames = CURATED_GAMES_BY_DATE['2026-10-25'] || [];
-  return baseGames.map((g, idx) => ({
-    ...g,
-    gameId: `${g.gameId}-${dateKey.slice(-2)}`,
-    dateKey,
-    gameStatus: dateKey > '2026-10-26' ? 1 : 3,
-    gameStatusText: dateKey > '2026-10-26' ? `${7 + idx}:30 PM ET` : 'FINAL',
-  }));
+  return days;
+}
+
+function formatDateChip(dateKey: string): { dayName: string; monthDay: string; fullLabel: string } {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dateObj = new Date(y, (m || 1) - 1, d || 1);
+  const dayName = dateObj
+    .toLocaleDateString('en-US', { weekday: 'short' })
+    .toUpperCase();
+  const monthName = dateObj
+    .toLocaleDateString('en-US', { month: 'short' })
+    .toUpperCase();
+  const fullLabel = dateObj.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  return {
+    dayName,
+    monthDay: `${monthName} ${d}`,
+    fullLabel,
+  };
 }
 
 export const NbaLeaguePassWrapper: React.FC<NbaLeaguePassWrapperProps> = ({
   url,
   drmL3Enforcer,
+  onNavigate,
 }) => {
-  const dateStrip = NBA_DATE_STRIP;
-  const [selectedDate, setSelectedDate] = useState<string>('2026-10-26');
+  const [selectedDate, setSelectedDate] = useState<string>('2026-10-25');
+  const [games, setGames] = useState<NbaGame[]>(() => getGamesForDateSync('2026-10-25'));
+  const [scheduleSource, setScheduleSource] = useState<'live_api' | 'curated'>('curated');
+  const [isLoadingGames, setIsLoadingGames] = useState<boolean>(false);
+
   const [hideScores, setHideScores] = useState<boolean>(() => loadHideScoresPref());
   const [session, setSession] = useState<NbaUserSession>(() => loadNbaSession());
-  const [favoriteTeamsOnly, setFavoriteTeamsOnly] = useState<boolean>(false);
-  const [favoriteTricodes, setFavoriteTricodes] = useState<string[]>(() => {
-    const loaded = loadNbaSession();
-    return loaded.favoriteTeams?.length ? loaded.favoriteTeams : ['LAL', 'OKC'];
-  });
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'wrapper' | 'raw_sandbox'>('wrapper');
+  const [isSignInOpen, setIsSignInOpen] = useState<boolean>(() =>
+    url.toLowerCase().includes('sign-in') || url.toLowerCase().includes('login')
+  );
 
-  // Top-right Sign In menu & modals
-  const [isSignInDropdownOpen, setIsSignInDropdownOpen] = useState<boolean>(false);
-  const [isSignInModalOpen, setIsSignInModalOpen] = useState<boolean>(false);
-  const [showHelpBanner, setShowHelpBanner] = useState<boolean>(false);
+  // Selected game and initial tab for the full-screen stream player modal
+  const [activeGameModal, setActiveGameModal] = useState<{
+    game: NbaGame;
+    tab: 'watch' | 'boxscore' | 'details';
+  } | null>(null);
 
-  // Active game & tab for stream player modal
-  const [activeGame, setActiveGame] = useState<NbaGame | null>(null);
-  const [activeModalTab, setActiveModalTab] = useState<'watch' | 'boxscore' | 'details'>('watch');
-  const [isLogsModalOpen, setIsLogsModalOpen] = useState<boolean>(false);
+  // Toggle between Custom Car Wrapper and Top-Level Official NBA.com Mode
+  const [viewMode, setViewMode] = useState<'wrapper' | 'official_web'>('wrapper');
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  // Compact Utility Popover Menu state
+  const [isUtilityMenuOpen, setIsUtilityMenuOpen] = useState<boolean>(false);
+  const utilityMenuRef = useRef<HTMLDivElement>(null);
 
+  // Close utility popover on outside click
   useEffect(() => {
+    if (!isUtilityMenuOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsSignInDropdownOpen(false);
+      if (utilityMenuRef.current && !utilityMenuRef.current.contains(e.target as Node)) {
+        setIsUtilityMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [isUtilityMenuOpen]);
 
-  // Automatically open sign-in modal if user navigated to nba.com/account/sign-in
+  // Whenever selectedDate changes, immediately update games synchronously AND fetch live API schedule
   useEffect(() => {
-    if (url.toLowerCase().includes('sign-in') || url.toLowerCase().includes('login')) {
-      setIsSignInModalOpen(true);
-    }
-  }, [url]);
+    let cancelled = false;
+    logDiagnosticEvent('NBA_DATE_CHANGE', `Selected NBA schedule date: ${selectedDate}`);
 
-  const handleToggleHideScores = (nextValue?: boolean) => {
-    const updated = typeof nextValue === 'boolean' ? nextValue : !hideScores;
-    setHideScores(updated);
-    saveHideScoresPref(updated);
-  };
+    // 1. Immediate synchronous update so date switching feels instant
+    const syncGames = getGamesForDateSync(selectedDate);
+    setGames(syncGames);
+    setScheduleSource('curated');
 
-  const handleSaveSession = (newSession: NbaUserSession) => {
-    setSession(newSession);
-    saveNbaSession(newSession);
-    setIsSignInDropdownOpen(false);
-  };
+    // 2. Async live API check (fetches real NBA scoreboard when available for that date)
+    setIsLoadingGames(true);
+    fetchGamesForDate(selectedDate)
+      .then((res) => {
+        if (!cancelled) {
+          setGames(res.games);
+          setScheduleSource(res.source);
+          setIsLoadingGames(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsLoadingGames(false);
+        }
+      });
 
-  const handleSignOut = () => {
-    const cleared: NbaUserSession = {
-      isSignedIn: false,
-      email: '',
-      displayName: '',
-      subscriptionTier: 'League Pass Premium',
-      favoriteTeams: favoriteTricodes,
+    return () => {
+      cancelled = true;
     };
-    setSession(cleared);
-    saveNbaSession(cleared);
-    setIsSignInDropdownOpen(false);
+  }, [selectedDate]);
+
+  const dateStripWindow = useMemo(() => buildSevenDayWindow(selectedDate), [selectedDate]);
+
+  const handleSelectDate = (newDateKey: string) => {
+    if (!newDateKey) return;
+    setSelectedDate(newDateKey);
   };
 
-  const toggleFavoriteTeam = (tricode: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setFavoriteTricodes((prev) => {
-      const next = prev.includes(tricode)
-        ? prev.filter((code) => code !== tricode)
-        : [...prev, tricode];
-      const updatedSession = { ...session, favoriteTeams: next };
-      setSession(updatedSession);
-      saveNbaSession(updatedSession);
+  const handleToggleHideScores = () => {
+    setHideScores((prev) => {
+      const next = !prev;
+      saveHideScoresPref(next);
       return next;
     });
   };
 
-  const allGamesForDate = getGamesForDateSync(selectedDate);
-  const filteredGames = allGamesForDate.filter((game) => {
-    if (
-      favoriteTeamsOnly &&
-      !favoriteTricodes.includes(game.awayTeam.tricode) &&
-      !favoriteTricodes.includes(game.homeTeam.tricode)
-    ) {
-      return false;
-    }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      return (
-        game.awayTeam.name.toLowerCase().includes(q) ||
-        game.awayTeam.city.toLowerCase().includes(q) ||
-        game.awayTeam.tricode.toLowerCase().includes(q) ||
-        game.homeTeam.name.toLowerCase().includes(q) ||
-        game.homeTeam.city.toLowerCase().includes(q) ||
-        game.homeTeam.tricode.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
-
-  const selectedDateObj =
-    dateStrip.find((d) => d.dateKey === selectedDate) || dateStrip[1];
-
-  const stepDate = (direction: -1 | 1) => {
-    const idx = dateStrip.findIndex((d) => d.dateKey === selectedDate);
-    if (idx === -1) return;
-    const nextIdx = idx + direction;
-    if (nextIdx >= 0 && nextIdx < dateStrip.length) {
-      setSelectedDate(dateStrip[nextIdx].dateKey);
-    }
+  const handleSignInSuccess = (newSession: NbaUserSession) => {
+    setSession(newSession);
+    saveNbaSession(newSession);
   };
 
-  const openGameModal = (game: NbaGame, tab: 'watch' | 'boxscore' | 'details' = 'watch') => {
-    diagnosticsService.logEvent(
-      'NBA_GAME_OPEN',
-      `Opened ${game.awayTeam.tricode} @ ${game.homeTeam.tricode} (${game.gameId}) tab=${tab} drmL3=${drmL3Enforcer}`
+  const handleSignOut = () => {
+    const signedOut: NbaUserSession = {
+      isSignedIn: false,
+      email: '',
+      displayName: 'Guest',
+      subscriptionTier: 'NBA ID Guest',
+    };
+    setSession(signedOut);
+    saveNbaSession(signedOut);
+  };
+
+  const handlePrevDate = () => {
+    setSelectedDate((prev) => addDaysToDateKey(prev, -1));
+  };
+
+  const handleNextDate = () => {
+    setSelectedDate((prev) => addDaysToDateKey(prev, 1));
+  };
+
+  const selectedDateInfo = useMemo(() => formatDateChip(selectedDate), [selectedDate]);
+
+  // If a game stream / box score / details modal is active, render it full-bleed
+  if (activeGameModal) {
+    return (
+      <>
+        <NbaStreamPlayerModal
+          game={activeGameModal.game}
+          initialTab={activeGameModal.tab}
+          hideScores={hideScores}
+          drmL3Enforcer={drmL3Enforcer}
+          session={session}
+          onOpenSignIn={() => setIsSignInOpen(true)}
+          onClose={() => setActiveGameModal(null)}
+        />
+        <NbaSignInModal
+          isOpen={isSignInOpen}
+          session={session}
+          onClose={() => setIsSignInOpen(false)}
+          onSignInSuccess={handleSignInSuccess}
+          onSignOut={handleSignOut}
+          onNavigateInApp={onNavigate}
+        />
+      </>
     );
-    setActiveModalTab(tab);
-    setActiveGame(game);
-  };
+  }
 
   return (
-    <div className="w-full h-full flex flex-col bg-[#0B0D13] text-white select-none overflow-hidden">
-      {/* Top Global NBA Navigation Bar */}
-      <header className="bg-[#050608] border-b border-white/10 px-4 sm:px-6 h-14 flex items-center justify-between shrink-0 z-20">
-        <div className="flex items-center gap-5">
-          {/* NBA Brand Logo */}
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#1D428A] via-[#1D428A] to-[#C8102E] flex items-center justify-center font-black text-xs tracking-tighter text-white shadow-inner border border-white/15">
-              NBA
-            </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <span className="font-black tracking-tight text-base text-white">
-                  GAMES
-                </span>
-                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
-                  LEAGUE PASS
-                </span>
-              </div>
-              <span className="text-[10px] text-white/45 hidden sm:inline">
-                In-App Automotive Wrapper · Widevine {drmL3Enforcer ? 'L3 Enforced' : 'Standard'}
+    <div className="w-full h-full bg-[#0B0D13] text-white flex flex-col overflow-hidden select-none">
+      {/* Top NBA League Pass Header Bar */}
+      <header className="bg-[#12151E] border-b border-neutral-800/90 px-4 py-2.5 flex items-center justify-between gap-3 shrink-0 z-20">
+        {/* Left: Official NBA Brand & Title */}
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-[#1D428A] to-[#C8102E] font-black text-xs tracking-wider text-white shadow shrink-0">
+            NBA
+          </div>
+          <div className="truncate">
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-sm sm:text-base tracking-tight text-white">
+                GAMES · LEAGUE PASS
               </span>
             </div>
+            <div className="text-[11px] text-neutral-400 truncate">
+              {selectedDateInfo.fullLabel} · {games.length} Games Available
+              {scheduleSource === 'live_api' ? ' · Live NBA Feed' : ''}
+            </div>
           </div>
-
-          {/* Primary Nav Tabs (Games -> Home active) */}
-          <nav className="hidden md:flex items-center gap-1 ml-2">
-            <button
-              type="button"
-              onClick={() => setViewMode('wrapper')}
-              className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                viewMode === 'wrapper'
-                  ? 'text-white bg-white/10'
-                  : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-            >
-              Home
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setViewMode('wrapper');
-                setFavoriteTeamsOnly(false);
-              }}
-              className="px-3 py-2 rounded-lg text-xs font-semibold text-white/60 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
-            >
-              Schedule
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (filteredGames.length > 0) {
-                  openGameModal(filteredGames[0], 'watch');
-                }
-              }}
-              className="px-3 py-2 rounded-lg text-xs font-semibold text-white/60 hover:text-white hover:bg-white/5 transition-colors cursor-pointer flex items-center gap-1.5"
-            >
-              <Tv className="w-3.5 h-3.5 text-amber-400" />
-              League Pass
-            </button>
-          </nav>
         </div>
 
-        {/* Right Controls: AA Logs + View Switcher + Top-Right Sign In Menu */}
-        <div className="flex items-center gap-2.5">
-          {/* Zero-Click Android Auto Diagnostic Logs Button */}
+        {/* Right: Primary Controls (Hide Scores Toggle + NBA ID Sign-In + Utility Menu) */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Hide Scores Spoiler Toggle Switch */}
           <button
             type="button"
-            onClick={() => setIsLogsModalOpen(true)}
-            className="px-2.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-950/60 hover:bg-emerald-900/70 text-emerald-300 transition-all flex items-center gap-1.5 cursor-pointer"
-            title="View Zero-Click Android Auto Diagnostic Logs"
-          >
-            <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">AA Logs</span>
-          </button>
-
-          {/* Toggle between Car Wrapper and Sandboxed Web View (stays 100% in-app) */}
-          <button
-            type="button"
-            onClick={() =>
-              setViewMode((prev) => (prev === 'wrapper' ? 'raw_sandbox' : 'wrapper'))
-            }
-            className={`px-3 py-2 min-h-[40px] rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
-              viewMode === 'raw_sandbox'
-                ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/40'
-                : 'bg-white/5 text-white/75 border-white/10 hover:bg-white/10'
+            onClick={handleToggleHideScores}
+            className={`min-h-[44px] px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all bouncy-tap ${
+              hideScores
+                ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                : 'bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-neutral-300'
             }`}
-            title="Switch between Custom Car Tile Wrapper and Sandboxed Webpage (Never triggers phone NBA app)"
+            title="Toggle Hide Scores to prevent game spoilers"
           >
-            <Globe className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">
-              {viewMode === 'wrapper' ? 'Car Tile Wrapper' : 'Sandboxed Web View'}
-            </span>
-          </button>
-
-          {/* Top-Right Sign In Dropdown Trigger (Matches user screenshot #2) */}
-          <div className="relative" ref={dropdownRef}>
-            <button
-              type="button"
-              onClick={() => setIsSignInDropdownOpen((prev) => !prev)}
-              className={`px-3.5 py-2 min-h-[40px] rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
-                session.isSignedIn
-                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
-                  : 'bg-white text-black border-white hover:bg-white/90'
+            {hideScores ? (
+              <EyeOff className="w-4 h-4 text-amber-400" />
+            ) : (
+              <Eye className="w-4 h-4 text-neutral-400" />
+            )}
+            <span className="hidden sm:inline">Hide Scores</span>
+            <div
+              className={`w-8 h-4 rounded-full p-0.5 transition-colors flex items-center ${
+                hideScores ? 'bg-amber-500 justify-end' : 'bg-neutral-700 justify-start'
               }`}
             >
-              <User className="w-3.5 h-3.5" />
-              <span>{session.isSignedIn ? session.displayName : 'Sign In'}</span>
+              <div className="w-3 h-3 rounded-full bg-white shadow" />
+            </div>
+          </button>
+
+          {/* Top-Right NBA ID Sign-In / Account Button */}
+          <button
+            type="button"
+            onClick={() => setIsSignInOpen(true)}
+            className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all bouncy-tap shadow ${
+              session.isSignedIn
+                ? 'bg-emerald-950/60 hover:bg-emerald-900/70 text-emerald-300 border border-emerald-700/50'
+                : 'bg-amber-500 hover:bg-amber-400 text-black'
+            }`}
+          >
+            {session.isSignedIn ? (
+              <>
+                <UserCheck className="w-4 h-4 text-emerald-400" />
+                <span className="max-w-[110px] truncate">{session.displayName}</span>
+              </>
+            ) : (
+              <>
+                <User className="w-4 h-4" />
+                <span>Sign In · NBA ID</span>
+              </>
+            )}
+          </button>
+
+          {/* Compact Utility Menu Button */}
+          <div className="relative" ref={utilityMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsUtilityMenuOpen((prev) => !prev)}
+              className={`min-w-[44px] min-h-[44px] p-2.5 rounded-xl border flex items-center justify-center transition-colors bouncy-tap ${
+                isUtilityMenuOpen
+                  ? 'bg-neutral-800 border-amber-500/50 text-amber-400'
+                  : 'bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-neutral-300'
+              }`}
+              title="Stream & View Options"
+              aria-label="Stream and View Options"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
             </button>
 
-            {/* Dropdown Menu matching Screenshot #2: Sign in with NBA ID, Hide Scores, Help */}
-            {isSignInDropdownOpen && (
-              <div className="absolute right-0 mt-2 w-64 bg-[#FFFFFF] text-[#111318] rounded-xl shadow-2xl border border-black/10 overflow-hidden z-50">
-                {session.isSignedIn ? (
-                  <div className="p-3.5 border-b border-gray-200 bg-gray-50">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-900 truncate">
-                        {session.email}
-                      </span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
-                        Active
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-gray-500 mt-0.5">
-                      {session.subscriptionTier}
-                    </p>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsSignInDropdownOpen(false);
-                      setIsSignInModalOpen(true);
-                    }}
-                    className="w-full px-4 py-3.5 text-left text-sm font-semibold text-gray-900 hover:bg-gray-100 transition-colors border-b border-gray-200 flex items-center justify-between cursor-pointer"
-                  >
-                    <span>Sign in with NBA ID</span>
-                    <Lock className="w-3.5 h-3.5 text-gray-500" />
-                  </button>
-                )}
-
-                {/* Hide Scores Row inside dropdown (exact match to screenshot #2) */}
-                <div
-                  onClick={() => handleToggleHideScores()}
-                  className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-gray-100 transition-colors border-b border-gray-200 cursor-pointer"
-                >
-                  <span className="text-sm font-medium text-gray-800">Hide Scores</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={hideScores}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleHideScores();
-                    }}
-                    className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${
-                      hideScores ? 'bg-[#E03A3E]' : 'bg-gray-300'
-                    }`}
-                  >
-                    <span
-                      className={`block w-4 h-4 rounded-full bg-white shadow transform transition-transform top-0.5 absolute ${
-                        hideScores ? 'translate-x-5' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
+            {isUtilityMenuOpen && (
+              <div className="absolute right-0 mt-2 w-72 rounded-2xl bg-[#161924] border border-neutral-700/80 shadow-2xl p-3 z-40 space-y-2.5 text-xs">
+                <div className="px-2 py-1 text-[11px] font-bold text-neutral-400 border-b border-neutral-800">
+                  VIEW &amp; DRM SETTINGS
                 </div>
 
+                {/* Switch between Custom Car Wrapper and Official Top-Level NBA.com Mode */}
                 <button
                   type="button"
                   onClick={() => {
-                    setShowHelpBanner((prev) => !prev);
-                    setIsSignInDropdownOpen(false);
+                    setViewMode(viewMode === 'wrapper' ? 'official_web' : 'wrapper');
+                    setIsUtilityMenuOpen(false);
                   }}
-                  className="w-full px-4 py-3 text-left text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors flex items-center justify-between cursor-pointer"
+                  className="w-full min-h-[44px] px-3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 flex items-center justify-between text-left font-semibold text-white bouncy-tap"
                 >
-                  <span>Help</span>
-                  <HelpCircle className="w-3.5 h-3.5 text-gray-400" />
+                  <span className="flex items-center gap-2">
+                    {viewMode === 'wrapper' ? (
+                      <>
+                        <Globe className="w-4 h-4 text-amber-400" />
+                        <span>Official NBA.com Web Mode</span>
+                      </>
+                    ) : (
+                      <>
+                        <Tv className="w-4 h-4 text-amber-400" />
+                        <span>Return to Car Tile Wrapper</span>
+                      </>
+                    )}
+                  </span>
+                  <span className="text-[10px] text-neutral-400">Switch</span>
                 </button>
 
-                {session.isSignedIn && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsSignInDropdownOpen(false);
-                        setIsSignInModalOpen(true);
-                      }}
-                      className="w-full px-4 py-2.5 text-left text-xs font-semibold text-indigo-600 hover:bg-gray-100 border-t border-gray-200 cursor-pointer"
-                    >
-                      Switch NBA ID Account...
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSignOut}
-                      className="w-full px-4 py-2.5 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50 border-t border-gray-200 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      Sign Out
-                    </button>
-                  </>
-                )}
+                {/* Status Readout */}
+                <div className="p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800/80 space-y-1">
+                  <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>
+                      {drmL3Enforcer ? 'Widevine L3 Enforced' : 'Standard Widevine DRM'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400 leading-relaxed">
+                    External mobile NBA app intents (<code className="text-neutral-300">nba://</code>) are blocked so playback stays inside AA Browser.
+                  </p>
+                </div>
               </div>
             )}
           </div>
         </div>
       </header>
 
-      {/* Optional In-App Help Banner explaining native app link blocker & Widevine */}
-      {showHelpBanner && (
-        <div className="bg-[#151924] border-b border-white/10 px-6 py-3 flex items-center justify-between text-xs text-white/80 shrink-0">
-          <div className="flex items-center gap-3">
-            <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              <strong>In-App Protection Active:</strong> All NBA.com links and League Pass streams are intercepted inside AA Browser so your phone never launches the native NBA app. Tap any matchup tile below to choose Home, Away, or Mobile View streams.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowHelpBanner(false)}
-            className="text-white/50 hover:text-white font-bold ml-4 cursor-pointer"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {/* Main Content Area: Either Custom Car Wrapper or Sandboxed In-App Raw Frame */}
-      {viewMode === 'raw_sandbox' ? (
-        <div className="flex-1 flex flex-col bg-black relative">
-          <div className="bg-[#11141D] px-4 py-2 border-b border-white/10 flex items-center justify-between text-xs text-white/70">
-            <span>
-              Sandboxed In-App View (<code className="text-amber-300">{url}</code>) — Android App Links Blocked
-            </span>
+      {/* Date Navigation Strip (Only in Wrapper Mode) */}
+      {viewMode === 'wrapper' && (
+        <div className="bg-[#151924] border-b border-neutral-800/80 px-4 py-2 flex items-center justify-between gap-2 shrink-0 overflow-x-auto">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setViewMode('wrapper')}
-              className="px-3 py-1 rounded-lg bg-amber-500 text-black font-bold hover:bg-amber-400 transition-colors cursor-pointer"
+              onClick={handlePrevDate}
+              className="min-w-[40px] min-h-[40px] p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 flex items-center justify-center bouncy-tap border border-neutral-800"
+              title="Previous Date"
             >
-              Return to Car Game Tiles Wrapper
+              <ChevronLeft className="w-4 h-4" />
             </button>
-          </div>
-          <iframe
-            src={url}
-            title="NBA Sandboxed In-App View"
-            className="w-full flex-1 border-0 bg-black"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-presentation"
-            allow="encrypted-media; autoplay; fullscreen"
-          />
-        </div>
-      ) : (
-        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-5">
-          {/* Sub-Header Controls Card: Date Picker + Hide Scores + Team Filter (Matches Screenshot #1) */}
-          <section className="bg-[#131722] border border-white/10 rounded-2xl p-4 sm:p-5 shadow-xl">
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-white/10">
-              <div>
-                <h1 className="text-lg sm:text-xl font-black tracking-tight text-white uppercase">
-                  NBA Games &amp; Scores
-                </h1>
-                <p className="text-xs text-white/55 mt-0.5">
-                  {selectedDateObj.dayOfWeek}, {selectedDateObj.monthLabel.split(' ')[0]} {selectedDateObj.dayNumber}, 2026 · Select a game tile to choose Home, Away, or Mobile View stream
-                </p>
-              </div>
 
-              {/* Search & Spoiler Toggle Bar */}
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex-1 sm:flex-initial sm:w-52">
-                  <Search className="w-3.5 h-3.5 text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Filter team (e.g. LAL, OKC)..."
-                    className="w-full bg-[#0B0D13] border border-white/10 rounded-xl pl-8 pr-3 py-2 text-xs text-white placeholder:text-white/35 focus:outline-none focus:border-white/30"
-                  />
-                </div>
-
-                {/* Prominent HIDE SCORES Switch */}
-                <div
-                  onClick={() => handleToggleHideScores()}
-                  className="flex items-center gap-2.5 bg-[#0B0D13] border border-white/10 px-3.5 py-2 rounded-xl cursor-pointer hover:border-white/25 transition-colors"
-                >
-                  {hideScores ? (
-                    <EyeOff className="w-4 h-4 text-rose-400" />
-                  ) : (
-                    <Eye className="w-4 h-4 text-white/60" />
-                  )}
-                  <span className="text-xs font-bold uppercase tracking-wider text-white/85">
-                    Hide Scores
-                  </span>
+            <div className="flex items-center gap-1.5">
+              {dateStripWindow.map((dKey) => {
+                const { dayName, monthDay } = formatDateChip(dKey);
+                const isSelected = dKey === selectedDate;
+                const dayGamesCount = getGamesForDateSync(dKey).length;
+                return (
                   <button
                     type="button"
-                    role="switch"
-                    aria-checked={hideScores}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleHideScores();
-                    }}
-                    className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${
-                      hideScores ? 'bg-[#E03A3E]' : 'bg-white/20'
+                    key={dKey}
+                    onClick={() => handleSelectDate(dKey)}
+                    className={`min-w-[78px] min-h-[44px] px-3 py-1 rounded-xl flex flex-col items-center justify-center transition-all bouncy-tap border ${
+                      isSelected
+                        ? 'bg-amber-500 text-black border-amber-400 font-extrabold shadow-md'
+                        : 'bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 border-neutral-800/90'
                     }`}
                   >
                     <span
-                      className={`block w-4 h-4 rounded-full bg-white shadow transform transition-transform top-0.5 absolute ${
-                        hideScores ? 'translate-x-5' : 'translate-x-0.5'
+                      className={`text-[10px] tracking-wider ${
+                        isSelected ? 'text-black/80 font-extrabold' : 'text-neutral-400 font-semibold'
                       }`}
-                    />
+                    >
+                      {dayName}
+                    </span>
+                    <span className="text-xs font-mono tabular-nums">{monthDay}</span>
+                    <span
+                      className={`text-[9px] mt-0.5 ${
+                        isSelected ? 'text-black/75 font-bold' : 'text-neutral-500'
+                      }`}
+                    >
+                      {dayGamesCount} GMS
+                    </span>
                   </button>
-                </div>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleNextDate}
+              className="min-w-[40px] min-h-[40px] p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 flex items-center justify-center bouncy-tap border border-neutral-800"
+              title="Next Date"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Right: Jump to Today (Live) + Native Date Input */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleSelectDate('2026-10-26')}
+              className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border bouncy-tap ${
+                selectedDate === '2026-10-26'
+                  ? 'bg-red-500/20 border-red-500/50 text-red-300'
+                  : 'bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-neutral-300'
+              }`}
+              title="View Live Showcase Slate (Oct 26)"
+            >
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              <span>Live Slate</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSelectDate(getTodayDateKey())}
+              className="min-h-[40px] px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-bold text-amber-400 flex items-center gap-1.5 bouncy-tap"
+              title="Jump to Today's Real Calendar Date"
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Today</span>
+            </button>
+
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => {
+                if (e.target.value) {
+                  handleSelectDate(e.target.value);
+                }
+              }}
+              className="min-h-[40px] bg-neutral-900 border border-neutral-800 rounded-xl px-2.5 py-1 text-xs text-neutral-200 font-mono focus:outline-none focus:border-amber-500 select-text"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      {viewMode === 'official_web' ? (
+        /* Top-Level Official NBA.com Mode (Replaces broken X-Frame-Options <iframe>) */
+        <div className="flex-1 w-full bg-[#090B10] flex flex-col items-center justify-center p-6 overflow-y-auto">
+          <div className="max-w-xl w-full bg-[#12151E] border border-neutral-800 rounded-3xl p-6 space-y-5 shadow-2xl">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                <Globe className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-extrabold text-white">
+                  Official NBA.com Full-Page WebView Mode
+                </h3>
+                <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
+                  NBA.com blocks embedded <code className="text-amber-300">&lt;iframe&gt;</code> frames via <code className="text-amber-300">X-Frame-Options: SAMEORIGIN</code> (which previously displayed a broken Android icon). Use the buttons below to open the real <span className="text-white font-semibold">nba.com</span> website as the top-level page inside AA Browser with a persistent top bar to return here anytime.
+                </p>
               </div>
             </div>
 
-            {/* Date Strip Scroller + My Favorite Teams Filter */}
-            <div className="pt-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-              {/* Calendar & 7-Day Horizontal Scroller */}
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
-                <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/75 text-xs font-semibold shrink-0">
-                  <Calendar className="w-4 h-4 text-amber-400" />
-                  <span>{selectedDateObj.monthLabel}</span>
-                </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => openNbaTopLevelInApp('https://www.nba.com/games')}
+                className="min-h-[52px] px-4 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg bouncy-tap"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>Open NBA.com/Games (Top-Level)</span>
+              </button>
 
-                <button
-                  type="button"
-                  onClick={() => stepDate(-1)}
-                  disabled={dateStrip[0]?.dateKey === selectedDate}
-                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white transition-colors cursor-pointer shrink-0"
-                  title="Previous Day"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-
-                <div className="flex items-center gap-1.5">
-                  {dateStrip.map((d) => {
-                    const isSelected = d.dateKey === selectedDate;
-                    return (
-                      <button
-                        key={d.dateKey}
-                        type="button"
-                        onClick={() => setSelectedDate(d.dateKey)}
-                        className={`min-w-[64px] px-3 py-2 rounded-xl flex flex-col items-center justify-center transition-all cursor-pointer border ${
-                          isSelected
-                            ? 'bg-white text-[#0B0D13] border-white font-black shadow-md'
-                            : 'bg-[#0B0D13] text-white/65 border-white/10 hover:bg-white/5 hover:text-white'
-                        }`}
-                      >
-                        <span className="text-[10px] uppercase tracking-wider font-bold opacity-75">
-                          {d.dayOfWeek}
-                        </span>
-                        <span className="text-sm font-black tabular-nums mt-0.5">
-                          {d.dayNumber}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => stepDate(1)}
-                  disabled={dateStrip[dateStrip.length - 1]?.dateKey === selectedDate}
-                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white transition-colors cursor-pointer shrink-0"
-                  title="Next Day"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* My Favorite Teams / All Games Segmented Filter */}
-              <div className="flex items-center gap-2 self-start xl:self-auto shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setFavoriteTeamsOnly(true)}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 border transition-all cursor-pointer ${
-                    favoriteTeamsOnly
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                      : 'bg-[#0B0D13] text-white/60 border-white/10 hover:text-white'
-                  }`}
-                >
-                  <Star
-                    className={`w-3.5 h-3.5 ${
-                      favoriteTeamsOnly ? 'fill-amber-400 text-amber-400' : ''
-                    }`}
-                  />
-                  My Favorite Teams ({favoriteTricodes.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFavoriteTeamsOnly(false)}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
-                    !favoriteTeamsOnly
-                      ? 'bg-white text-black border-white'
-                      : 'bg-[#0B0D13] text-white/60 border-white/10 hover:text-white'
-                  }`}
-                >
-                  All Games ({allGamesForDate.length})
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => openNbaTopLevelInApp('https://www.nba.com/account/sign-in')}
+                className="min-h-[52px] px-4 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-xs flex items-center justify-center gap-2 border border-neutral-700 bouncy-tap"
+              >
+                <User className="w-4 h-4 text-amber-400" />
+                <span>Open NBA.com Sign-In (Top-Level)</span>
+              </button>
             </div>
-          </section>
 
-          {/* Parsed Game Cards List */}
-          <div className="space-y-4 pb-8">
-            {filteredGames.length === 0 ? (
-              <div className="bg-[#131722] border border-white/10 rounded-2xl p-10 text-center">
-                <p className="text-base font-bold text-white">
-                  No matching games found for {selectedDateObj.dayOfWeek}, {selectedDateObj.monthLabel}
-                </p>
-                <p className="text-xs text-white/50 mt-1">
-                  Try switching back to &ldquo;All Games&rdquo; or clearing your team search filter.
-                </p>
-                {favoriteTeamsOnly && (
-                  <button
-                    type="button"
-                    onClick={() => setFavoriteTeamsOnly(false)}
-                    className="mt-4 px-4 py-2 rounded-xl bg-white text-black text-xs font-bold cursor-pointer"
-                  >
-                    Show All Games
-                  </button>
-                )}
+            <div className="pt-2 border-t border-neutral-800 flex items-center justify-between">
+              <span className="text-[11px] text-neutral-400">
+                Widevine L3 Enforcer &amp; Native App Blocker Active
+              </span>
+              <button
+                type="button"
+                onClick={() => setViewMode('wrapper')}
+                className="px-4 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-amber-400 font-bold text-xs bouncy-tap"
+              >
+                ← Back to Car Game Tiles
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Car-Optimized NBA Games Tile Grid */
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="max-w-7xl mx-auto">
+            {/* Active Date Banner so user sees immediate confirmation when changing dates */}
+            <div className="flex items-center justify-between mb-3.5 px-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400">
+                  {selectedDateInfo.fullLabel}
+                </span>
+                <span className="text-xs text-neutral-500">·</span>
+                <span className="text-xs font-semibold text-neutral-300">
+                  {games.length} Matchups
+                </span>
               </div>
-            ) : (
-              filteredGames.map((game) => {
-                const isUpcoming = game.gameStatus === 1;
+              {isLoadingGames && (
+                <div className="flex items-center gap-1.5 text-xs text-amber-400">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Syncing schedule...</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {games.map((game) => {
                 const isLive = game.gameStatus === 2;
                 const isFinal = game.gameStatus === 3;
-                const awayIsWinner = !isUpcoming && game.awayTeam.score > game.homeTeam.score;
-                const homeIsWinner = !isUpcoming && game.homeTeam.score > game.awayTeam.score;
+                const awayWon = isFinal && game.awayTeam.score > game.homeTeam.score;
+                const homeWon = isFinal && game.homeTeam.score > game.awayTeam.score;
 
                 return (
-                  <article
+                  <div
                     key={game.gameId}
-                    onClick={() => openGameModal(game, 'watch')}
-                    className="bg-[#131722] hover:bg-[#171C29] border border-white/10 hover:border-white/25 rounded-2xl p-4 sm:p-5 transition-all shadow-lg cursor-pointer group"
+                    className="bg-[#141824] hover:bg-[#181D2B] border border-neutral-800/90 hover:border-neutral-700 rounded-3xl p-4 sm:p-5 transition-all shadow-xl flex flex-col justify-between gap-4"
                   >
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
-                      {/* Left 5 Columns: Matchup Teams, Logos, Records, and Scores */}
-                      <div className="lg:col-span-5 flex items-center justify-between gap-4 lg:border-r lg:border-white/10 lg:pr-6">
-                        <div className="flex-1 space-y-3.5">
-                          {/* Away Team Row */}
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <button
-                                type="button"
-                                onClick={(e) => toggleFavoriteTeam(game.awayTeam.tricode, e)}
-                                className="text-white/30 hover:text-amber-400 transition-colors cursor-pointer"
-                                title={`Favorite ${game.awayTeam.name}`}
-                              >
-                                <Star
-                                  className={`w-4 h-4 ${
-                                    favoriteTricodes.includes(game.awayTeam.tricode)
-                                      ? 'fill-amber-400 text-amber-400'
-                                      : ''
-                                  }`}
-                                />
-                              </button>
-                              <NbaTeamLogo
-                                teamId={game.awayTeam.teamId}
-                                tricode={game.awayTeam.tricode}
-                                primaryColor={game.awayTeam.primaryColor}
-                                size="md"
-                              />
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className={`text-base font-black tracking-tight truncate ${
-                                      awayIsWinner || hideScores
-                                        ? 'text-white'
-                                        : 'text-white/65'
-                                    }`}
-                                  >
-                                    {game.awayTeam.name}
-                                  </span>
-                                </div>
-                                <span className="text-xs text-white/45 font-medium tabular-nums">
-                                  {game.awayTeam.record} · Away
-                                </span>
-                              </div>
-                            </div>
+                    {/* Card Top Status & Broadcaster Header */}
+                    <div className="flex items-center justify-between border-b border-neutral-800/80 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        {isLive && (
+                          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                        )}
+                        <span
+                          className={`text-xs font-extrabold tracking-wider ${
+                            isLive
+                              ? 'text-red-400'
+                              : isFinal
+                              ? 'text-neutral-300'
+                              : 'text-amber-400'
+                          }`}
+                        >
+                          {game.gameStatusText}
+                        </span>
+                      </div>
 
-                            {/* Away Score */}
-                            <div className="flex items-center gap-2">
-                              {hideScores ? (
-                                <span className="text-sm font-bold text-white/35 bg-white/5 px-2.5 py-1 rounded-lg">
-                                  HIDDEN
-                                </span>
-                              ) : isUpcoming ? (
-                                <span className="text-sm font-semibold text-white/40 tabular-nums">
-                                  —
-                                </span>
-                              ) : (
-                                <div className="flex items-center gap-1.5">
-                                  <span
-                                    className={`text-2xl font-black tabular-nums ${
-                                      awayIsWinner ? 'text-white' : 'text-white/45'
-                                    }`}
-                                  >
-                                    {game.awayTeam.score}
-                                  </span>
-                                  {awayIsWinner && (
-                                    <span className="text-white text-xs">◀</span>
-                                  )}
-                                </div>
-                              )}
+                      <div className="flex items-center gap-2 text-[11px] text-neutral-400 font-semibold">
+                        <Tv className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{game.nationalBroadcaster || 'NBA League Pass'}</span>
+                      </div>
+                    </div>
+
+                    {/* Middle Section: Matchup Teams + Scores (Left) | Game Leaders (Right) */}
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                      {/* Teams & Scores (7 cols) */}
+                      <div className="md:col-span-7 space-y-3 md:border-r border-neutral-800/80 md:pr-4">
+                        {/* Away Team Row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <NbaTeamLogo
+                              teamId={game.awayTeam.teamId}
+                              tricode={game.awayTeam.tricode}
+                              primaryColor={game.awayTeam.primaryColor}
+                              size="md"
+                            />
+                            <div className="truncate">
+                              <div
+                                className={`text-base font-extrabold truncate ${
+                                  awayWon || !isFinal ? 'text-white' : 'text-neutral-400'
+                                }`}
+                              >
+                                {game.awayTeam.name}
+                              </div>
+                              <div className="text-xs text-neutral-400 font-mono">
+                                {game.awayTeam.record}
+                              </div>
                             </div>
                           </div>
 
-                          {/* Home Team Row */}
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <button
-                                type="button"
-                                onClick={(e) => toggleFavoriteTeam(game.homeTeam.tricode, e)}
-                                className="text-white/30 hover:text-amber-400 transition-colors cursor-pointer"
-                                title={`Favorite ${game.homeTeam.name}`}
-                              >
-                                <Star
-                                  className={`w-4 h-4 ${
-                                    favoriteTricodes.includes(game.homeTeam.tricode)
-                                      ? 'fill-amber-400 text-amber-400'
-                                      : ''
-                                  }`}
-                                />
-                              </button>
-                              <NbaTeamLogo
-                                teamId={game.homeTeam.teamId}
-                                tricode={game.homeTeam.tricode}
-                                primaryColor={game.homeTeam.primaryColor}
-                                size="md"
-                              />
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span
-                                    className={`text-base font-black tracking-tight truncate ${
-                                      homeIsWinner || hideScores
-                                        ? 'text-white'
-                                        : 'text-white/65'
-                                    }`}
-                                  >
-                                    {game.homeTeam.name}
-                                  </span>
-                                </div>
-                                <span className="text-xs text-white/45 font-medium tabular-nums">
-                                  {game.homeTeam.record} · Home
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Home Score */}
-                            <div className="flex items-center gap-2">
-                              {hideScores ? (
-                                <span className="text-sm font-bold text-white/35 bg-white/5 px-2.5 py-1 rounded-lg">
-                                  HIDDEN
-                                </span>
-                              ) : isUpcoming ? (
-                                <span className="text-sm font-semibold text-white/40 tabular-nums">
-                                  —
-                                </span>
-                              ) : (
-                                <div className="flex items-center gap-1.5">
-                                  <span
-                                    className={`text-2xl font-black tabular-nums ${
-                                      homeIsWinner ? 'text-white' : 'text-white/45'
-                                    }`}
-                                  >
-                                    {game.homeTeam.score}
-                                  </span>
-                                  {homeIsWinner && (
-                                    <span className="text-white text-xs">◀</span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-2xl font-black font-mono tabular-nums ${
+                                hideScores
+                                  ? 'text-neutral-500'
+                                  : awayWon
+                                  ? 'text-white'
+                                  : isFinal
+                                  ? 'text-neutral-400'
+                                  : 'text-white'
+                              }`}
+                            >
+                              {hideScores
+                                ? '•••'
+                                : game.gameStatus === 1
+                                ? '—'
+                                : game.awayTeam.score}
+                            </span>
+                            {!hideScores && awayWon && (
+                              <span className="text-amber-400 text-xs">◀</span>
+                            )}
                           </div>
                         </div>
 
-                        {/* Status / Broadcaster Column */}
-                        <div className="pl-3 flex flex-col items-end justify-center text-right shrink-0">
-                          <span
-                            className={`text-xs font-black uppercase tracking-wider ${
-                              isLive
-                                ? 'text-rose-400'
-                                : isFinal
-                                ? 'text-white/80'
-                                : 'text-amber-300'
-                            }`}
-                          >
-                            {game.gameStatusText}
-                          </span>
-                          <span className="text-[11px] font-semibold text-white/45 mt-1">
-                            {game.isLeaguePass ? 'League Pass' : 'National TV'}
-                          </span>
-                          <span className="text-[10px] text-white/35 mt-0.5">
-                            {game.streams.length} feeds available
-                          </span>
+                        {/* Home Team Row */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <NbaTeamLogo
+                              teamId={game.homeTeam.teamId}
+                              tricode={game.homeTeam.tricode}
+                              primaryColor={game.homeTeam.primaryColor}
+                              size="md"
+                            />
+                            <div className="truncate">
+                              <div
+                                className={`text-base font-extrabold truncate ${
+                                  homeWon || !isFinal ? 'text-white' : 'text-neutral-400'
+                                }`}
+                              >
+                                {game.homeTeam.name}
+                              </div>
+                              <div className="text-xs text-neutral-400 font-mono">
+                                {game.homeTeam.record}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-2xl font-black font-mono tabular-nums ${
+                                hideScores
+                                  ? 'text-neutral-500'
+                                  : homeWon
+                                  ? 'text-white'
+                                  : isFinal
+                                  ? 'text-neutral-400'
+                                  : 'text-white'
+                              }`}
+                            >
+                              {hideScores
+                                ? '•••'
+                                : game.gameStatus === 1
+                                ? '—'
+                                : game.homeTeam.score}
+                            </span>
+                            {!hideScores && homeWon && (
+                              <span className="text-amber-400 text-xs">◀</span>
+                            )}
+                          </div>
                         </div>
                       </div>
 
-                      {/* Middle 4 Columns: GAME LEADERS (Matches Screenshot #1 with PTS / REB / AST) */}
-                      <div className="lg:col-span-4 lg:border-r lg:border-white/10 lg:pr-6">
-                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-white/45 mb-2.5">
-                          <span>Game Leaders</span>
-                          <div className="flex items-center gap-4 tabular-nums">
+                      {/* Game Leaders Table (5 cols) */}
+                      <div className="md:col-span-5 space-y-2 text-xs">
+                        <div className="flex items-center justify-between text-[10px] font-bold text-neutral-400 border-b border-neutral-800/70 pb-1">
+                          <span>GAME LEADERS</span>
+                          <div className="flex items-center gap-3 font-mono">
                             <span className="w-6 text-right">PTS</span>
                             <span className="w-6 text-right">REB</span>
                             <span className="w-6 text-right">AST</span>
                           </div>
                         </div>
 
-                        <div className="space-y-2.5">
-                          {[game.awayTeam.leader, game.homeTeam.leader].map((leader) => (
-                            <div
-                              key={`${game.gameId}-${leader.teamTricode}-${leader.name}`}
-                              className="flex items-center justify-between text-xs"
-                            >
-                              <div className="min-w-0 pr-2">
-                                <p className="font-bold text-white truncate">
-                                  {leader.name}
-                                </p>
-                                <p className="text-[11px] text-white/45">
-                                  {leader.teamTricode} · #{leader.jerseyNumber} · {leader.position}
-                                </p>
+                        {[game.awayTeam.leader, game.homeTeam.leader].map((leader) => (
+                          <div
+                            key={`${game.gameId}-${leader.teamTricode}-${leader.name}`}
+                            className="flex items-center justify-between gap-2 py-0.5"
+                          >
+                            <div className="truncate min-w-0">
+                              <div className="font-bold text-neutral-200 truncate">
+                                {leader.name}
                               </div>
-
-                              {hideScores && !isUpcoming ? (
-                                <span className="text-[11px] font-semibold text-white/35">
-                                  Stats Hidden
-                                </span>
-                              ) : (
-                                <div className="flex items-center gap-4 font-bold tabular-nums text-white/90">
-                                  <span className="w-6 text-right">{leader.points}</span>
-                                  <span className="w-6 text-right">{leader.rebounds}</span>
-                                  <span className="w-6 text-right">{leader.assists}</span>
-                                </div>
-                              )}
+                              <div className="text-[10px] text-neutral-400">
+                                {leader.teamTricode} · #{leader.jerseyNumber} {leader.position}
+                              </div>
                             </div>
-                          ))}
-                        </div>
-                      </div>
 
-                      {/* Right 3 Columns: Stream Quick-Select Badges + WATCH / BOX SCORE / GAME DETAILS */}
-                      <div className="lg:col-span-3 flex flex-col justify-between gap-3">
-                        {/* Available Multi-View Stream Feeds */}
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[11px] text-white/55 font-medium">
-                            Streams:
-                          </span>
-                          <span className="text-[11px] font-semibold text-amber-300">
-                            Home ({game.homeTeam.tricode}) · Away ({game.awayTeam.tricode}) · Mobile View
-                          </span>
-                        </div>
-
-                        {/* Primary WATCH Button + Secondary Actions */}
-                        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openGameModal(game, 'watch');
-                            }}
-                            className="flex-1 min-h-[46px] px-4 py-2.5 rounded-xl bg-white hover:bg-amber-400 text-[#0B0D13] font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors shadow-md cursor-pointer"
-                          >
-                            <Play className="w-4 h-4 fill-current" />
-                            <span>Watch</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openGameModal(game, 'boxscore');
-                            }}
-                            className="min-h-[46px] px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-white/85 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                            title="View Box Score"
-                          >
-                            <BarChart2 className="w-3.5 h-3.5 text-white/60" />
-                            <span>Box Score</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openGameModal(game, 'details');
-                            }}
-                            className="min-h-[46px] px-3 py-2.5 rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-white/85 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                            title="View Game Details & Arena Info"
-                          >
-                            <FileText className="w-3.5 h-3.5 text-white/60" />
-                            <span className="hidden xl:inline">Details</span>
-                          </button>
-                        </div>
+                            <div className="flex items-center gap-3 font-mono tabular-nums font-bold text-white shrink-0">
+                              <span className="w-6 text-right">
+                                {hideScores ? '••' : leader.points}
+                              </span>
+                              <span className="w-6 text-right text-neutral-300">
+                                {hideScores ? '••' : leader.rebounds}
+                              </span>
+                              <span className="w-6 text-right text-neutral-300">
+                                {hideScores ? '••' : leader.assists}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  </article>
+
+                    {/* Bottom Action Buttons: WATCH (Primary) · BOX SCORE · GAME DETAILS */}
+                    <div className="pt-2 border-t border-neutral-800/80 grid grid-cols-3 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setActiveGameModal({ game, tab: 'watch' })}
+                        className="min-h-[46px] px-3 py-2 rounded-2xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg bouncy-tap"
+                      >
+                        <Play className="w-4 h-4 fill-black shrink-0" />
+                        <span>WATCH</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveGameModal({ game, tab: 'boxscore' })}
+                        className="min-h-[46px] px-3 py-2 rounded-2xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 font-bold text-xs flex items-center justify-center gap-1.5 bouncy-tap"
+                      >
+                        <BarChart3 className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                        <span>BOX SCORE</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveGameModal({ game, tab: 'details' })}
+                        className="min-h-[46px] px-3 py-2 rounded-2xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 font-bold text-xs flex items-center justify-center gap-1.5 bouncy-tap"
+                      >
+                        <Info className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                        <span>DETAILS</span>
+                      </button>
+                    </div>
+                  </div>
                 );
-              })
-            )}
+              })}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Top-Right NBA ID Sign-In Modal */}
+      {/* NBA ID Sign-In Modal */}
       <NbaSignInModal
-        isOpen={isSignInModalOpen}
-        onClose={() => setIsSignInModalOpen(false)}
+        isOpen={isSignInOpen}
         session={session}
-        drmL3Enabled={drmL3Enforcer}
-        onSaveSession={handleSaveSession}
-      />
-
-      {/* Multi-Stream Selector & Video Player Modal */}
-      {activeGame && (
-        <NbaStreamPlayerModal
-          game={activeGame}
-          initialTab={activeModalTab}
-          hideScores={hideScores}
-          drmL3Enforcer={drmL3Enforcer}
-          session={session}
-          onOpenSignIn={() => setIsSignInModalOpen(true)}
-          onClose={() => setActiveGame(null)}
-        />
-      )}
-
-      {/* Zero-Click Android Auto Diagnostic Logs Modal */}
-      <DiagnosticLogsModal
-        isOpen={isLogsModalOpen}
-        onClose={() => setIsLogsModalOpen(false)}
+        onClose={() => setIsSignInOpen(false)}
+        onSignInSuccess={handleSignInSuccess}
+        onSignOut={handleSignOut}
+        onNavigateInApp={onNavigate}
       />
     </div>
   );
