@@ -17,6 +17,7 @@ import {
   FileText,
   Lock,
   Sparkles,
+  Terminal,
 } from 'lucide-react';
 import { NbaGame, NbaUserSession } from '../../types/nba';
 import {
@@ -30,6 +31,8 @@ import {
 import { NbaTeamLogo } from './NbaTeamLogo';
 import { NbaSignInModal } from './NbaSignInModal';
 import { NbaStreamPlayerModal } from './NbaStreamPlayerModal';
+import { DiagnosticLogsModal } from '../diagnostics/DiagnosticLogsModal';
+import { diagnosticsService } from '../../services/diagnosticsService';
 
 interface NbaLeaguePassWrapperProps {
   url: string;
@@ -81,6 +84,7 @@ export const NbaLeaguePassWrapper: React.FC<NbaLeaguePassWrapperProps> = ({
   // Active game & tab for stream player modal
   const [activeGame, setActiveGame] = useState<NbaGame | null>(null);
   const [activeModalTab, setActiveModalTab] = useState<'watch' | 'boxscore' | 'details'>('watch');
+  const [isLogsModalOpen, setIsLogsModalOpen] = useState<boolean>(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -175,6 +179,10 @@ export const NbaLeaguePassWrapper: React.FC<NbaLeaguePassWrapperProps> = ({
   };
 
   const openGameModal = (game: NbaGame, tab: 'watch' | 'boxscore' | 'details' = 'watch') => {
+    diagnosticsService.logEvent(
+      'NBA_GAME_OPEN',
+      `Opened ${game.awayTeam.tricode} @ ${game.homeTeam.tricode} (${game.gameId}) tab=${tab} drmL3=${drmL3Enforcer}`
+    );
     setActiveModalTab(tab);
     setActiveGame(game);
   };
@@ -242,8 +250,19 @@ export const NbaLeaguePassWrapper: React.FC<NbaLeaguePassWrapperProps> = ({
           </nav>
         </div>
 
-        {/* Right Controls: View Switcher + Top-Right Sign In Menu */}
+        {/* Right Controls: AA Logs + View Switcher + Top-Right Sign In Menu */}
         <div className="flex items-center gap-2.5">
+          {/* Zero-Click Android Auto Diagnostic Logs Button */}
+          <button
+            type="button"
+            onClick={() => setIsLogsModalOpen(true)}
+            className="px-2.5 py-2 min-h-[40px] rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-950/60 hover:bg-emerald-900/70 text-emerald-300 transition-all flex items-center gap-1.5 cursor-pointer"
+            title="View Zero-Click Android Auto Diagnostic Logs"
+          >
+            <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">AA Logs</span>
+          </button>
+
           {/* Toggle between Car Wrapper and Sandboxed Web View (stays 100% in-app) */}
           <button
             type="button"
@@ -889,6 +908,12 @@ export const NbaLeaguePassWrapper: React.FC<NbaLeaguePassWrapperProps> = ({
           onClose={() => setActiveGame(null)}
         />
       )}
+
+      {/* Zero-Click Android Auto Diagnostic Logs Modal */}
+      <DiagnosticLogsModal
+        isOpen={isLogsModalOpen}
+        onClose={() => setIsLogsModalOpen(false)}
+      />
     </div>
   );
 };

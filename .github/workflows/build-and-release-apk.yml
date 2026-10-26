@@ -117,10 +117,12 @@ jobs:
             ## 🏀 AA Browser — NBA League Pass Car Edition (`${{ steps.prepare_apk.outputs.tag_name }}`)
 
             ### What's Included in this APK:
+            - **Android Auto Car Head Unit Projection Fix**: Removed `<uses name="notification" />` from `automotive_app_desc.xml` (which caused Android Auto to display the stock `"No new messages during this drive"` template) and configured full `kododake/AABrowser` Activity projection (`<uses name="media" />`, `appCategory="game"`, `distractionOptimized="true"`, `CAR_LAUNCHER`, `NAVIGATION`, `APP_MAPS`, `launchMode="singleTop"`, `resizeableActivity="true"`, and `androidx.car.app`).
+            - **Zero-Click Automatic Background Log Collector**: Automatically captures all Android Auto lifecycle events, Car Mode transitions, Virtual Displays, Intents, WebView/Widevine DRM events, and `logcat` output in the background (`files/aa_diagnostic_logs.txt`)—viewable and copyable anytime from the **AA Logs** button on your phone without needing to click anything on the car screen.
             - **NBA League Pass Start Page Tile**: Quick-link tile right alongside YouTube on the main landing page.
             - **100% In-App Navigation (No Native Phone App Hijacking)**: All `nba.com` URLs, logins, and streams stay inside AA Browser and block `intent://` / Android App Links from opening the native NBA phone app.
             - **Custom NBA Games & Scores Tile Wrapper**: Touch-friendly automotive game tiles with official team logos, records, `PTS / REB / AST` game leaders, 7-day date scroller, and **Hide Scores** spoiler toggle.
-            - **Multi-Stream Selector & Widevine DRM Support**: Select **Home Team Stream**, **Away Team Stream**, **Mobile View Stream** (zoomed camera), or **Full Game Recap** with hardware-accelerated Widevine DRM (`RESOURCE_PROTECTED_MEDIA_ID`) enabled.
+            - **Multi-Stream Selector & Widevine L3 Enforcer**: Select **Home Team Stream**, **Away Team Stream**, **Mobile View Stream** (zoomed camera), or **Full Game Recap** with hardware-accelerated Widevine DRM (`RESOURCE_PROTECTED_MEDIA_ID` + `SW_SECURE_DECODE` L3 Enforcer) enabled.
             - **Top-Right NBA ID Sign-In**: Built-in NBA ID sign-in dropdown and authentication modal.
 
             ### 📥 Installation

@@ -13,6 +13,7 @@ import {
   MoveUp,
   MoveDown,
   Settings2,
+  Terminal,
 } from 'lucide-react';
 import { BookmarkEntry } from '../../types/browser';
 import {
@@ -26,6 +27,8 @@ import {
   AA_ANYTHING_RELEASE_URL,
 } from '../../utils/urlFormatter';
 import { SlotPickerDialog } from './SlotPickerDialog';
+import { DiagnosticLogsModal } from '../diagnostics/DiagnosticLogsModal';
+import { diagnosticsService } from '../../services/diagnosticsService';
 
 interface StartPageProps {
   slots: (string | null)[];
@@ -61,9 +64,11 @@ export const StartPage: React.FC<StartPageProps> = ({
   const [photoOnlyMode, setPhotoOnlyMode] = useState(false);
   const [activeSponsorTab, setActiveSponsorTab] = useState<'bmc' | 'github'>('bmc');
   const [selectedSlotForEdit, setSelectedSlotForEdit] = useState<number | null>(null);
+  const [isLogsModalOpen, setIsLogsModalOpen] = useState(false);
 
   // Update clock every second
   useEffect(() => {
+    diagnosticsService.ensureAutoInitialized();
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -71,7 +76,9 @@ export const StartPage: React.FC<StartPageProps> = ({
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchInput.trim()) {
-      onNavigate(formatNavigableUrl(searchInput));
+      const targetUrl = formatNavigableUrl(searchInput);
+      diagnosticsService.logEvent('START_PAGE_NAV', `Search/Address navigation -> ${targetUrl}`);
+      onNavigate(targetUrl);
     }
   };
 
@@ -123,10 +130,23 @@ export const StartPage: React.FC<StartPageProps> = ({
               {formattedDate}
             </div>
 
-            <div className="mt-4 flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-800/80 border border-neutral-700/80 text-xs text-blue-400 font-semibold tracking-wide">
-              <span>AABROWSER</span>
-              <span className="text-neutral-500">&bull;</span>
-              <span className="text-neutral-300">Car Head Unit Edition</span>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-800/80 border border-neutral-700/80 text-xs text-blue-400 font-semibold tracking-wide">
+                <span>AABROWSER</span>
+                <span className="text-neutral-500">&bull;</span>
+                <span className="text-neutral-300">Car Head Unit Edition</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsLogsModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-950/80 hover:bg-emerald-900/80 border border-emerald-500/40 text-xs text-emerald-300 font-semibold tracking-wide transition-colors shadow"
+                title="View Zero-Click Android Auto Diagnostic Logs"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <Terminal className="w-3.5 h-3.5" />
+                <span>AA Logs (Auto-Recording)</span>
+              </button>
             </div>
           </div>
 
@@ -233,7 +253,10 @@ export const StartPage: React.FC<StartPageProps> = ({
                         ? 'bg-gradient-to-br from-[#13192B]/95 via-neutral-900/95 to-[#2A1018]/90 border-amber-500/35 hover:border-amber-400/70'
                         : 'bg-neutral-900/80 hover:bg-neutral-800/90 border-neutral-800 hover:border-neutral-700'
                     }`}
-                    onClick={() => onNavigate(url)}
+                    onClick={() => {
+                      diagnosticsService.logEvent('START_PAGE_SLOT', `Tapped Quick Link Slot #${index + 1} (${title}) -> ${url}`);
+                      onNavigate(url);
+                    }}
                   >
                     <div className="flex items-start justify-between">
                       {isNbaSlot ? (
@@ -423,6 +446,14 @@ export const StartPage: React.FC<StartPageProps> = ({
               <ImageIcon className="w-3.5 h-3.5 text-purple-400" />
               <span>Photo Mode</span>
             </button>
+
+            <button
+              onClick={() => setIsLogsModalOpen(true)}
+              className="px-4 py-2 rounded-xl bg-emerald-950/80 hover:bg-emerald-900/90 text-emerald-200 hover:text-white text-xs font-semibold flex items-center gap-2 border border-emerald-500/40 shadow bouncy-tap"
+            >
+              <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Android Auto Logs</span>
+            </button>
           </div>
         </div>
       )}
@@ -445,6 +476,12 @@ export const StartPage: React.FC<StartPageProps> = ({
           onClose={() => setSelectedSlotForEdit(null)}
         />
       )}
+
+      {/* Android Auto Zero-Click Diagnostic Logs Modal */}
+      <DiagnosticLogsModal
+        isOpen={isLogsModalOpen}
+        onClose={() => setIsLogsModalOpen(false)}
+      />
     </div>
   );
 };
